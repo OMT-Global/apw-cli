@@ -1,6 +1,7 @@
 use crate::client::ApplePasswordManager;
 use crate::daemon::{start_daemon, DaemonOptions};
 use crate::error::APWError;
+use crate::host::{native_host_doctor, native_host_install, native_host_uninstall};
 use crate::types::{Payload, RenamedPasswordEntry, RuntimeMode, Status, TOTPEntry};
 use crate::utils::{bigint_to_base64, read_bigint};
 use clap::{Args, Parser, Subcommand};
@@ -217,6 +218,7 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     Auth(AuthCommand),
+    Host(HostCommand),
     Pw(PwCommand),
     Otp(OtpCommand),
     Start(StartCommand),
@@ -250,6 +252,25 @@ pub struct AuthResponseArgs {
     pub client_key: String,
     #[arg(short, long)]
     pub username: String,
+}
+
+#[derive(Args)]
+pub struct HostCommand {
+    #[command(subcommand)]
+    pub command: HostSubcommand,
+}
+
+#[derive(Subcommand)]
+pub enum HostSubcommand {
+    Install,
+    Doctor(HostDoctorArgs),
+    Uninstall,
+}
+
+#[derive(Args)]
+pub struct HostDoctorArgs {
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]
@@ -308,6 +329,7 @@ pub struct StatusCommand {
 pub async fn run(mut manager: ApplePasswordManager, cli: Cli) -> Result<(), APWError> {
     match cli.command {
         Commands::Auth(args) => run_auth(&mut manager, args, cli.json),
+        Commands::Host(args) => run_host(args, cli.json),
         Commands::Pw(args) => run_pw(&mut manager, args, cli.json),
         Commands::Otp(args) => run_otp(&mut manager, args, cli.json),
         Commands::Start(args) => run_start(args).await,
@@ -363,6 +385,25 @@ fn run_auth(
     };
 
     print_output(&result, Status::Success, cli_json);
+    Ok(())
+}
+
+fn run_host(args: HostCommand, cli_json: bool) -> Result<(), APWError> {
+    match args.command {
+        HostSubcommand::Install => {
+            let payload = native_host_install()?;
+            print_output(&payload, Status::Success, cli_json);
+        }
+        HostSubcommand::Doctor(options) => {
+            let payload = native_host_doctor()?;
+            print_output(&payload, Status::Success, options.json || cli_json);
+        }
+        HostSubcommand::Uninstall => {
+            let payload = native_host_uninstall()?;
+            print_output(&payload, Status::Success, cli_json);
+        }
+    }
+
     Ok(())
 }
 
@@ -448,13 +489,14 @@ fn parse_runtime_mode(raw: &str) -> std::result::Result<RuntimeMode, String> {
     let normalized = raw.trim().to_lowercase();
     Ok(match normalized.as_str() {
         "auto" => RuntimeMode::Auto,
+        "native" => RuntimeMode::Native,
         "browser" => RuntimeMode::Browser,
         "direct" => RuntimeMode::Direct,
         "launchd" => RuntimeMode::Launchd,
         "disabled" => RuntimeMode::Disabled,
         _ => {
             return Err(
-                "runtime mode must be one of auto|browser|direct|launchd|disabled.".to_string(),
+                "runtime mode must be one of auto|native|direct|launchd|disabled.".to_string(),
             );
         }
     })

@@ -10,6 +10,7 @@ chrono = { version = "0.4.39", features = ["serde"] }
 clap = { version = "4.5.20", features = ["derive"] }
 futures-util = "0.3.31"
 hex = "0.4.3"
+libc = "0.2.171"
 openssl = "0.10.68"
 num-bigint = { version = "0.4.6", features = ["serde"] }
 num-traits = "0.2.19"

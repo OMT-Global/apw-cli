@@ -1,49 +1,65 @@
-# Standalone project breakout (omt-global / apw-native)
+# Standalone project breakout
 
-Use these commands to create an independent standalone project copy under
-`/Users/<you>/src/omt-global/apw-native` and keep this repo as the new maintained
-origin.
+This document describes how to take APW from an upstream fork to a standalone
+public project while keeping the Rust implementation as the supported path.
 
-1. Run the one-shot bootstrap helper:
+Release reference version: `v1.2.0`
+
+## Goal
+
+Create a new standalone repository, preserve the archived Deno history for audit
+purposes, and publish the Rust implementation as the only maintained runtime.
+
+## Recommended breakout steps
+
+1. Create the new repository, for example `omt-global/apw-native`
+2. Copy the working tree into the new repository without the old `.git` history
+3. Preserve `legacy/deno/` as a read-only archive
+4. Keep `rust/` as the only release, packaging, and CI target
+5. Update repository metadata, Homebrew publishing metadata, and documentation
+
+## Example bootstrap flow
+
+From the existing checkout:
 
 ```bash
-cd /Users/<you>/src/apw
 ./scripts/bootstrap-apw-native-standalone.sh
 ```
 
-2. Or run manually:
+## Manual breakout flow
 
 ```bash
-mkdir -p /Users/<you>/src/omt-global
-cd /Users/<you>/src/apw
-rsync -a --exclude='.git' --exclude='target' --exclude='dist' --exclude='build' . /Users/<you>/src/omt-global/apw-native/
-```
-
-3. Initialize the standalone repo and repoint remotes:
-
-```bash
-cd /Users/<you>/src/omt-global/apw-native
+mkdir -p ../apw-native
+rsync -a --exclude='.git' --exclude='target' --exclude='dist' --exclude='build' ./ ../apw-native/
+cd ../apw-native
 git init -b main
 git remote add origin git@github.com:omt-global/apw-native.git
-git remote -v
 ```
 
-4. Commit and push:
+Then:
 
 ```bash
 git add -A
-git commit -m "chore: rebrand repository to apw-native under omt-global"
-git push -u origin <branch>
+git commit -m "chore: initialize standalone apw-native project"
+git push -u origin main
 ```
 
-5. For Homebrew formula publication, keep taps aligned with the `apw-native` namespace:
+## Metadata to update after breakout
 
-- `brew tap <you>/apw-native`
-- `brew install <you>/apw-native/apw-native`
+- `README.md`
+- `packaging/homebrew/apw.rb`
+- release workflow repository references
+- issue templates, funding, and repository settings if you use them
 
-Notes:
+## Release posture after breakout
 
-- `README.md`, `packaging/homebrew/apw.rb`, and
-  `packaging/homebrew/install-from-source.sh` are set for `omt-global/apw-native`.
-- `legacy/deno/` remains a read-only archive and is preserved only for compatibility
-  audits/rollback.
+- keep `apw` as the installed executable name
+- publish binaries from the Rust path only
+- treat `legacy/deno/` as archived reference material only
+- run parity and security gates before the first public release
+
+Related docs:
+
+- [README.md](/Users/johnteneyckjr./src/apw/README.md)
+- [docs/MIGRATION_AND_PARITY.md](/Users/johnteneyckjr./src/apw/docs/MIGRATION_AND_PARITY.md)
+- [docs/SECURITY_POSTURE_AND_TESTING.md](/Users/johnteneyckjr./src/apw/docs/SECURITY_POSTURE_AND_TESTING.md)

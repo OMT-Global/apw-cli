@@ -4,6 +4,7 @@ mod cli;
 mod client;
 mod daemon;
 mod error;
+mod host;
 mod secrets;
 mod srp;
 mod types;

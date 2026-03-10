@@ -125,6 +125,11 @@ fn status_json_has_stable_shape() {
         assert_eq!(output["ok"], true);
         assert!(output["payload"]["daemon"]["host"].is_string());
         assert!(output["payload"]["daemon"]["port"].is_u64());
+        assert!(output["payload"]["host"].is_object());
+        assert!(output["payload"]["host"]["status"].is_null());
+        assert!(output["payload"]["host"]["bundleVersion"].is_null());
+        assert!(output["payload"]["host"]["connectedAt"].is_null());
+        assert!(output["payload"]["host"]["lastError"].is_null());
         assert!(output["payload"]["bridge"].is_object());
         assert!(output["payload"]["bridge"]["status"].is_null());
         assert!(output["payload"]["bridge"]["browser"].is_null());
@@ -161,7 +166,9 @@ fn pw_list_reports_failed_launch_state_before_invalid_session() {
         let output = parse_json_output(&stderr);
         assert_eq!(output["code"], 103);
         assert_eq!(output["ok"], false);
-        assert_eq!(output["error"], "helper test failure");
+        let error = output["error"].as_str().unwrap_or_default();
+        assert!(error.contains("helper test failure"));
+        assert!(error.contains("daemon.preflight.status="));
     });
 }
 

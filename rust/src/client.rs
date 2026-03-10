@@ -1,4 +1,8 @@
+use crate::daemon::{
+    helper_preflight_failure_message, helper_preflight_status, helper_preflight_status_note,
+};
 use crate::error::{APWError, Result};
+use crate::host::{native_host_failure_message, native_host_status_note};
 use crate::srp::{
     base64_decode_numeric, build_client_key_exchange, build_client_verification_message,
     is_valid_pake_message, parse_pake_message_type, SRPSession, SessionValues,
@@ -149,6 +153,9 @@ fn parse_response_envelope(payload: &Value) -> Result<Value> {
 }
 
 fn launch_error_from_config(config: &APWRuntimeConfig) -> Option<APWError> {
+    if config.runtime_mode == RuntimeMode::Native {
+        return native_host_error_from_config(config);
+    }
     if config.runtime_mode == RuntimeMode::Browser {
         return browser_bridge_error_from_config(config);
     }
@@ -157,14 +164,66 @@ fn launch_error_from_config(config: &APWRuntimeConfig) -> Option<APWError> {
         None | Some(LAUNCH_STATUS_OK) => None,
         Some(LAUNCH_STATUS_DISABLED) => Some(APWError::new(
             Status::ProcessNotRunning,
-            "Helper launch is disabled. Run `apw start` and keep it running.",
+            helper_preflight_failure_message(config.runtime_mode, "Helper launch is disabled."),
         )),
         Some(LAUNCH_STATUS_FAILED) | Some(_) => Some(APWError::new(
             Status::ProcessNotRunning,
-            config
-                .last_launch_error
-                .clone()
-                .unwrap_or_else(|| LAUNCH_NOT_RUNNING_MESSAGE.to_string()),
+            helper_preflight_failure_message(
+                config.runtime_mode,
+                config
+                    .last_launch_error
+                    .clone()
+                    .unwrap_or_else(|| LAUNCH_NOT_RUNNING_MESSAGE.to_string())
+                    .as_str(),
+            ),
+        )),
+    }
+}
+
+fn native_host_remediation(config: &APWRuntimeConfig, default_status: &str) -> String {
+    let host_status = config
+        .bridge_status
+        .as_deref()
+        .unwrap_or(default_status)
+        .to_string();
+
+    match host_status.as_str() {
+        BRIDGE_STATUS_DISCONNECTED => format!(
+            "Daemon is running in native mode, but the APW native host disconnected. {}",
+            native_host_status_note()
+        ),
+        BRIDGE_STATUS_ERROR => {
+            if let Some(error) = config.bridge_last_error.as_deref() {
+                format!(
+                    "Daemon is running in native mode, but the APW native host reported an error: {error}. {}",
+                    native_host_status_note()
+                )
+            } else {
+                native_host_failure_message(
+                    "Daemon is running in native mode, but the APW native host is not attached.",
+                )
+            }
+        }
+        _ => native_host_failure_message(
+            "Daemon is running in native mode, but the APW native host is not attached.",
+        ),
+    }
+}
+
+fn native_host_error_from_config(config: &APWRuntimeConfig) -> Option<APWError> {
+    match config.bridge_status.as_deref() {
+        Some(BRIDGE_STATUS_ATTACHED) => None,
+        Some(BRIDGE_STATUS_ERROR) => Some(APWError::new(
+            Status::ProcessNotRunning,
+            native_host_remediation(config, BRIDGE_STATUS_ERROR),
+        )),
+        Some(BRIDGE_STATUS_DISCONNECTED) => Some(APWError::new(
+            Status::ProcessNotRunning,
+            native_host_remediation(config, BRIDGE_STATUS_DISCONNECTED),
+        )),
+        Some(BRIDGE_STATUS_WAITING) | None | Some(_) => Some(APWError::new(
+            Status::ProcessNotRunning,
+            native_host_remediation(config, BRIDGE_STATUS_WAITING),
         )),
     }
 }
@@ -185,18 +244,20 @@ fn browser_bridge_remediation(config: &APWRuntimeConfig, default_status: &str) -
 
     match bridge_status.as_str() {
         BRIDGE_STATUS_DISCONNECTED => format!(
-            "Daemon is running in browser mode, but the {browser} bridge disconnected. Reload the APW Chrome bridge extension and wait for `apw status --json` to report `bridge.status=attached`."
+            "Daemon is running in browser mode, but the {browser} bridge disconnected. Reload the APW Chrome bridge extension and wait for `apw status --json` to report `bridge.status=attached`. {}",
+            helper_preflight_status_note(config.runtime_mode)
         ),
         BRIDGE_STATUS_ERROR => {
             if let Some(error) = config.bridge_last_error.as_deref() {
                 format!(
-                    "Daemon is running in browser mode, but the {browser} bridge reported an error: {error}. Reload the APW Chrome bridge extension and wait for `apw status --json` to report `bridge.status=attached`."
+                    "Daemon is running in browser mode, but the {browser} bridge reported an error: {error}. Reload the APW Chrome bridge extension and wait for `apw status --json` to report `bridge.status=attached`. {}",
+                    helper_preflight_status_note(config.runtime_mode)
                 )
             } else {
-                base
+                format!("{base} {}", helper_preflight_status_note(config.runtime_mode))
             }
         }
-        _ => base,
+        _ => format!("{base} {}", helper_preflight_status_note(config.runtime_mode)),
     }
 }
 
@@ -1019,6 +1080,18 @@ impl ApplePasswordManager {
             None => true,
         };
 
+        let preflight = helper_preflight_status(config.runtime_mode);
+        let bundle_version = preflight
+            .get("appBundle")
+            .and_then(|value| value.get("version"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let bridge_browser = if config.runtime_mode == RuntimeMode::Browser {
+            config.bridge_browser.clone()
+        } else {
+            None
+        };
+
         json!({
           "daemon": {
             "host": config.host,
@@ -1028,10 +1101,17 @@ impl ApplePasswordManager {
             "lastLaunchStatus": config.last_launch_status,
             "lastLaunchError": config.last_launch_error,
             "lastLaunchStrategy": config.last_launch_strategy,
+            "preflight": preflight,
+          },
+          "host": {
+            "status": config.bridge_status,
+            "connectedAt": config.bridge_connected_at,
+            "bundleVersion": bundle_version,
+            "lastError": config.bridge_last_error,
           },
           "bridge": {
             "status": config.bridge_status,
-            "browser": config.bridge_browser,
+            "browser": bridge_browser,
             "connectedAt": config.bridge_connected_at,
             "lastError": config.bridge_last_error,
           },
@@ -1735,7 +1815,8 @@ mod tests {
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert_eq!(error.code, Status::ProcessNotRunning);
-        assert_eq!(error.message, "helper test failure");
+        assert!(error.message.contains("helper test failure"));
+        assert!(error.message.contains("daemon.preflight.status="));
         supports_keychain_for_tests(None);
     }
 
@@ -2618,7 +2699,8 @@ mod tests {
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert_eq!(error.code, Status::ProcessNotRunning);
-        assert_eq!(error.message, "helper test failure");
+        assert!(error.message.contains("helper test failure"));
+        assert!(error.message.contains("daemon.preflight.status="));
         supports_keychain_for_tests(None);
     }
 
@@ -2635,7 +2717,8 @@ mod tests {
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert_eq!(error.code, Status::ProcessNotRunning);
-        assert_eq!(error.message, "helper test failure");
+        assert!(error.message.contains("helper test failure"));
+        assert!(error.message.contains("daemon.preflight.status="));
         supports_keychain_for_tests(None);
     }
 
@@ -2652,7 +2735,8 @@ mod tests {
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert_eq!(error.code, Status::ProcessNotRunning);
-        assert_eq!(error.message, "helper test failure");
+        assert!(error.message.contains("helper test failure"));
+        assert!(error.message.contains("daemon.preflight.status="));
         supports_keychain_for_tests(None);
     }
 
@@ -2700,6 +2784,9 @@ mod tests {
         assert!(payload["daemon"]["lastLaunchStatus"].is_null());
         assert!(payload["daemon"]["lastLaunchError"].is_null());
         assert!(payload["daemon"]["lastLaunchStrategy"].is_null());
+        assert!(payload["daemon"]["preflight"].is_object());
+        assert!(payload["daemon"]["preflight"]["status"].is_string());
+        assert!(payload["daemon"]["preflight"]["launchStrategies"].is_array());
     }
 
     #[test]
@@ -2762,6 +2849,7 @@ mod tests {
         let error = result.unwrap_err();
         assert_eq!(error.code, Status::ProcessNotRunning);
         assert!(error.message.contains("bridge.status=attached"));
+        assert!(error.message.contains("daemon.preflight.status="));
         supports_keychain_for_tests(None);
     }
 

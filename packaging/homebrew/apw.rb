@@ -13,17 +13,20 @@ class Apw < Formula
   end
 
   def install
+    system "bash", "./scripts/build-native-host.sh"
     system "cargo", "build", "--manifest-path", "rust/Cargo.toml", "--release"
     bin.install "rust/target/release/apw"
+    libexec.install "native-host/dist/APWNativeHost.app"
   end
 
   service do
-    run [opt_bin/"apw", "start"]
+    run [opt_bin/"apw", "start", "--runtime-mode", "native", "--bind", "127.0.0.1", "--port", "10000"]
     keep_alive true
     run_type :immediate
   end
 
   test do
-    assert_match "Apple Passwords CLI", shell_output("#{bin}/apw --help")
+    assert_match version.to_s, shell_output("#{bin}/apw --version")
+    assert_match "\"host\"", shell_output("#{bin}/apw status --json 2>&1")
   end
 end

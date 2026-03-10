@@ -1,12 +1,19 @@
 use crate::error::{APWError, Result};
+use crate::host::{
+    ensure_native_host_runtime_dir, native_host_failure_message, native_host_preflight_status,
+    native_host_socket_path, native_host_status_note,
+};
 use crate::types::{APWResponseEnvelope, Command, ManifestConfig, Message, RuntimeMode, Status};
 use crate::utils::{write_config, WriteConfigInput};
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::fs;
 use std::future::Future;
 use std::io::ErrorKind;
+#[cfg(target_os = "macos")]
+use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 #[cfg(target_os = "macos")]
@@ -19,7 +26,7 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::sync::Mutex as StdMutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, UdpSocket};
+use tokio::net::{TcpListener, UdpSocket, UnixListener, UnixStream};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::time::{timeout, Duration};
@@ -278,7 +285,11 @@ impl BrowserBridge {
             stale,
             APWError::new(
                 Status::ProcessNotRunning,
-                "Browser bridge was replaced before pending requests completed.",
+                if self.runtime_mode == RuntimeMode::Native {
+                    "Native host was replaced before pending requests completed."
+                } else {
+                    "Browser bridge was replaced before pending requests completed."
+                },
             ),
         );
         self.persist_snapshot().await;
@@ -343,6 +354,7 @@ impl BrowserBridge {
             .await
         {
             let message = browser_bridge_not_attached_message(
+                self.runtime_mode,
                 self.snapshot().await.browser.as_deref(),
                 BRIDGE_STATUS_DISCONNECTED,
                 error.as_deref(),
@@ -374,6 +386,7 @@ impl BrowserBridge {
                 APWError::new(
                     Status::ProcessNotRunning,
                     browser_bridge_not_attached_message(
+                        self.runtime_mode,
                         state.snapshot.browser.as_deref(),
                         state.snapshot.status.as_str(),
                         state.snapshot.last_error.as_deref(),
@@ -384,6 +397,7 @@ impl BrowserBridge {
                 return Err(APWError::new(
                     Status::ProcessNotRunning,
                     browser_bridge_not_attached_message(
+                        self.runtime_mode,
                         state.snapshot.browser.as_deref(),
                         state.snapshot.status.as_str(),
                         state.snapshot.last_error.as_deref(),
@@ -403,6 +417,7 @@ impl BrowserBridge {
                     APWError::new(
                         Status::ProcessNotRunning,
                         browser_bridge_not_attached_message(
+                            self.runtime_mode,
                             state.snapshot.browser.as_deref(),
                             BRIDGE_STATUS_DISCONNECTED,
                             state.snapshot.last_error.as_deref(),
@@ -415,16 +430,20 @@ impl BrowserBridge {
         timeout(Duration::from_millis(COMMAND_TIMEOUT_MS), receiver)
             .await
             .map_err(|_| {
-                APWError::new(
-                    Status::CommunicationTimeout,
-                    "Browser bridge response timed out.",
-                )
+                let message = if self.runtime_mode == RuntimeMode::Native {
+                    "Native host response timed out."
+                } else {
+                    "Browser bridge response timed out."
+                };
+                APWError::new(Status::CommunicationTimeout, message)
             })?
             .map_err(|_| {
-                APWError::new(
-                    Status::ProcessNotRunning,
-                    "Browser bridge disconnected before returning a response.",
-                )
+                let message = if self.runtime_mode == RuntimeMode::Native {
+                    "Native host disconnected before returning a response."
+                } else {
+                    "Browser bridge disconnected before returning a response."
+                };
+                APWError::new(Status::ProcessNotRunning, message)
             })?
     }
 
@@ -436,10 +455,30 @@ impl BrowserBridge {
 }
 
 fn browser_bridge_not_attached_message(
+    runtime_mode: RuntimeMode,
     browser: Option<&str>,
     status: &str,
     last_error: Option<&str>,
 ) -> String {
+    if runtime_mode == RuntimeMode::Native {
+        let base = match status {
+            BRIDGE_STATUS_DISCONNECTED => {
+                "Daemon is running in native mode, but the APW native host disconnected."
+            }
+            BRIDGE_STATUS_ERROR => {
+                if let Some(error) = last_error {
+                    return format!(
+                        "Daemon is running in native mode, but the APW native host reported an error: {error}. {}",
+                        native_host_status_note()
+                    );
+                }
+                "Daemon is running in native mode, but the APW native host is not attached."
+            }
+            _ => "Daemon is running in native mode, but the APW native host is not attached.",
+        };
+        return format!("{base} {}", native_host_status_note());
+    }
+
     let browser = browser.unwrap_or("Chrome");
     match status {
         BRIDGE_STATUS_DISCONNECTED => format!(
@@ -566,6 +605,7 @@ fn resolve_uid_via_id_command() -> Option<u32> {
 
 fn backend_selection(mode: RuntimeMode) -> Vec<Box<dyn HelperBackend + Send + Sync>> {
     match mode {
+        RuntimeMode::Native => Vec::new(),
         RuntimeMode::Browser => Vec::new(),
         RuntimeMode::Direct => vec![Box::new(DirectHelperBackend)],
         RuntimeMode::Launchd => vec![Box::new(LaunchdCompatibleBackend)],
@@ -631,10 +671,312 @@ fn current_macos_major_version() -> Option<u32> {
 fn resolve_runtime_mode(mode: RuntimeMode) -> RuntimeMode {
     match mode {
         RuntimeMode::Auto if current_macos_major_version().is_some_and(|major| major >= 26) => {
-            RuntimeMode::Browser
+            RuntimeMode::Native
         }
         other => other,
     }
+}
+
+fn launch_strategy_labels(mode: RuntimeMode) -> Vec<String> {
+    match mode {
+        RuntimeMode::Native => vec!["native_host".to_string()],
+        RuntimeMode::Browser => vec!["browser_bridge".to_string()],
+        RuntimeMode::Disabled => Vec::new(),
+        other => backend_selection(other)
+            .into_iter()
+            .map(|backend| backend.strategy().to_string())
+            .collect(),
+    }
+}
+
+fn empty_manifest_preflight() -> Value {
+    json!({
+        "searchedPaths": manifest_search_paths(),
+        "path": Value::Null,
+        "found": false,
+        "valid": false,
+        "binaryPath": Value::Null,
+        "binaryAbsolute": Value::Null,
+        "binaryExecutable": Value::Null,
+        "allowedOrigins": Value::Null,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn manifest_search_paths() -> Vec<String> {
+    MANIFEST_PATHS.iter().map(|path| path.to_string()).collect()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn manifest_search_paths() -> Vec<String> {
+    Vec::new()
+}
+
+#[cfg(target_os = "macos")]
+fn inspect_manifest_preflight() -> (Value, String, Option<String>) {
+    let searched_paths = manifest_search_paths();
+    let manifest_path = MANIFEST_PATHS
+        .iter()
+        .copied()
+        .find(|candidate| Path::new(candidate).exists());
+
+    let manifest_json = |path: Option<&str>,
+                         found: bool,
+                         valid: bool,
+                         binary_path: Option<&str>,
+                         binary_absolute: Option<bool>,
+                         binary_executable: Option<bool>,
+                         allowed_origins: Option<usize>| {
+        json!({
+            "searchedPaths": searched_paths.clone(),
+            "path": path,
+            "found": found,
+            "valid": valid,
+            "binaryPath": binary_path,
+            "binaryAbsolute": binary_absolute,
+            "binaryExecutable": binary_executable,
+            "allowedOrigins": allowed_origins,
+        })
+    };
+
+    let Some(path) = manifest_path else {
+        return (
+            manifest_json(None, false, false, None, None, None, None),
+            "manifest_missing".to_string(),
+            Some("APW Helper manifest not found. You must be running macOS 14+.".to_string()),
+        );
+    };
+
+    let manifest_content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(_) => {
+            return (
+                manifest_json(Some(path), true, false, None, None, None, None),
+                "manifest_invalid".to_string(),
+                Some("Malformed helper manifest JSON.".to_string()),
+            );
+        }
+    };
+
+    let candidate: Value = match serde_json::from_str(&manifest_content) {
+        Ok(value) => value,
+        Err(_) => {
+            return (
+                manifest_json(Some(path), true, false, None, None, None, None),
+                "manifest_invalid".to_string(),
+                Some("Malformed helper manifest.".to_string()),
+            );
+        }
+    };
+
+    if !is_manifest(&candidate) {
+        return (
+            manifest_json(Some(path), true, false, None, None, None, None),
+            "manifest_invalid".to_string(),
+            Some("Malformed helper manifest.".to_string()),
+        );
+    }
+
+    let binary_path = candidate.get("path").and_then(Value::as_str);
+    let allowed_origins = candidate
+        .get("allowedOrigins")
+        .or_else(|| candidate.get("allowed_extensions"))
+        .and_then(Value::as_array)
+        .map(Vec::len);
+    let binary_absolute =
+        binary_path.map(|value| is_absolute_unix_path(value) && !value.contains(".."));
+
+    if binary_absolute != Some(true) {
+        return (
+            manifest_json(
+                Some(path),
+                true,
+                false,
+                binary_path,
+                binary_absolute,
+                None,
+                allowed_origins,
+            ),
+            "manifest_invalid".to_string(),
+            Some("Unexpected helper binary path.".to_string()),
+        );
+    }
+
+    let binary_executable = binary_path.map(is_executable);
+    if binary_executable != Some(true) {
+        return (
+            manifest_json(
+                Some(path),
+                true,
+                true,
+                binary_path,
+                binary_absolute,
+                binary_executable,
+                allowed_origins,
+            ),
+            "binary_not_executable".to_string(),
+            Some("Cannot execute helper binary.".to_string()),
+        );
+    }
+
+    (
+        manifest_json(
+            Some(path),
+            true,
+            true,
+            binary_path,
+            binary_absolute,
+            binary_executable,
+            allowed_origins,
+        ),
+        "ready".to_string(),
+        None,
+    )
+}
+
+pub(crate) fn helper_preflight_status(configured_mode: RuntimeMode) -> Value {
+    let resolved_mode = resolve_runtime_mode(configured_mode);
+
+    if resolved_mode == RuntimeMode::Native {
+        return native_host_preflight_status(configured_mode);
+    }
+
+    if resolved_mode == RuntimeMode::Disabled {
+        return json!({
+            "supported": cfg!(target_os = "macos"),
+            "platform": {
+                "os": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+                "macosMajorVersion": current_macos_major_version(),
+            },
+            "configuredRuntimeMode": configured_mode,
+            "resolvedRuntimeMode": resolved_mode,
+            "launchStrategies": launch_strategy_labels(resolved_mode),
+            "status": "disabled",
+            "error": Value::Null,
+            "manifest": empty_manifest_preflight(),
+        });
+    }
+
+    if !cfg!(target_os = "macos") {
+        return json!({
+            "supported": false,
+            "platform": {
+                "os": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+                "macosMajorVersion": current_macos_major_version(),
+            },
+            "configuredRuntimeMode": configured_mode,
+            "resolvedRuntimeMode": resolved_mode,
+            "launchStrategies": launch_strategy_labels(resolved_mode),
+            "status": "unsupported_platform",
+            "error": "APW Helper manifest unsupported outside of macOS.",
+            "manifest": empty_manifest_preflight(),
+        });
+    }
+
+    if resolved_mode == RuntimeMode::Browser {
+        return json!({
+            "supported": true,
+            "platform": {
+                "os": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+                "macosMajorVersion": current_macos_major_version(),
+            },
+            "configuredRuntimeMode": configured_mode,
+            "resolvedRuntimeMode": resolved_mode,
+            "launchStrategies": launch_strategy_labels(resolved_mode),
+            "status": "browser_bridge",
+            "error": Value::Null,
+            "manifest": empty_manifest_preflight(),
+        });
+    }
+
+    #[cfg(target_os = "macos")]
+    let (manifest, status, error) = inspect_manifest_preflight();
+    #[cfg(not(target_os = "macos"))]
+    let (manifest, status, error) = (
+        empty_manifest_preflight(),
+        "unsupported_platform".to_string(),
+        Some("APW Helper manifest unsupported outside of macOS.".to_string()),
+    );
+
+    json!({
+        "supported": true,
+        "platform": {
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+            "macosMajorVersion": current_macos_major_version(),
+        },
+        "configuredRuntimeMode": configured_mode,
+        "resolvedRuntimeMode": resolved_mode,
+        "launchStrategies": launch_strategy_labels(resolved_mode),
+        "status": status,
+        "error": error,
+        "manifest": manifest,
+    })
+}
+
+fn helper_preflight_state_name(preflight: &Value) -> String {
+    preflight
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn helper_preflight_guidance_from(preflight: &Value) -> String {
+    let status = helper_preflight_state_name(preflight);
+    let platform_os = preflight
+        .get("platform")
+        .and_then(|value| value.get("os"))
+        .and_then(Value::as_str)
+        .unwrap_or(std::env::consts::OS);
+    let platform_arch = preflight
+        .get("platform")
+        .and_then(|value| value.get("arch"))
+        .and_then(Value::as_str)
+        .unwrap_or(std::env::consts::ARCH);
+
+    match status.as_str() {
+        "browser_bridge" => "Install the browser bridge with `./scripts/install-browser-bridge.sh`, load `browser-bridge/` in Chrome, start the daemon with `apw start`, and wait for `apw status --json` to report `bridge.status=attached`.".to_string(),
+        "manifest_missing" => "Run `apw status --json` and review `daemon.preflight.manifest.searchedPaths`; the Apple helper manifest is missing on this host.".to_string(),
+        "manifest_invalid" => "Run `apw status --json` and review `daemon.preflight.manifest.path` plus `daemon.preflight.manifest.binaryPath`; the helper manifest is present but invalid.".to_string(),
+        "binary_not_executable" => "Run `apw status --json` and review `daemon.preflight.manifest.binaryPath` plus `daemon.preflight.manifest.binaryExecutable`; the helper binary is not executable.".to_string(),
+        "unsupported_platform" => format!(
+            "APW is supported only on macOS. Current platform: {platform_os}/{platform_arch}."
+        ),
+        "disabled" => {
+            "Re-run `apw start` with `--runtime-mode native`, `--runtime-mode direct`, or `--runtime-mode launchd`.".to_string()
+        }
+        _ => {
+            "Run `apw status --json` and inspect `daemon.preflight` for the resolved runtime path and helper launch diagnostics.".to_string()
+        }
+    }
+}
+
+pub(crate) fn helper_preflight_status_note(configured_mode: RuntimeMode) -> String {
+    if resolve_runtime_mode(configured_mode) == RuntimeMode::Native {
+        return native_host_status_note();
+    }
+    let preflight = helper_preflight_status(configured_mode);
+    let status = helper_preflight_state_name(&preflight);
+    format!(
+        "Run `apw status --json` and inspect `daemon.preflight`; current `daemon.preflight.status={status}`."
+    )
+}
+
+pub(crate) fn helper_preflight_failure_message(
+    configured_mode: RuntimeMode,
+    base_message: &str,
+) -> String {
+    if resolve_runtime_mode(configured_mode) == RuntimeMode::Native {
+        return native_host_failure_message(base_message);
+    }
+    let preflight = helper_preflight_status(configured_mode);
+    let status = helper_preflight_state_name(&preflight);
+    let guidance = helper_preflight_guidance_from(&preflight);
+    format!("{base_message} {guidance} Current `daemon.preflight.status={status}`.")
 }
 
 fn capabilities_probe_message() -> Message {
@@ -1526,6 +1868,377 @@ async fn start_browser_daemon_inner(options: DaemonOptions, host: String) -> Res
     }
 }
 
+async fn read_native_host_frame(stream: &mut UnixStream) -> Result<Vec<u8>> {
+    let mut length = [0_u8; 4];
+    stream.read_exact(&mut length).await.map_err(|error| {
+        APWError::new(
+            Status::ProcessNotRunning,
+            format!("Failed reading native host frame header: {error}"),
+        )
+    })?;
+    let payload_length = u32::from_le_bytes(length) as usize;
+    if payload_length == 0 || payload_length > MAX_HELPER_PAYLOAD {
+        return Err(APWError::new(
+            Status::ProtoInvalidResponse,
+            "Invalid native host frame size.",
+        ));
+    }
+
+    let mut payload = vec![0_u8; payload_length];
+    stream.read_exact(&mut payload).await.map_err(|error| {
+        APWError::new(
+            Status::ProcessNotRunning,
+            format!("Failed reading native host frame: {error}"),
+        )
+    })?;
+    Ok(payload)
+}
+
+async fn write_native_host_frame(stream: &mut UnixStream, payload: &[u8]) -> Result<()> {
+    if payload.len() > MAX_HELPER_PAYLOAD {
+        return Err(APWError::new(
+            Status::InvalidParam,
+            "Outgoing native host payload exceeds max size.",
+        ));
+    }
+
+    stream
+        .write_all(&(payload.len() as u32).to_le_bytes())
+        .await
+        .map_err(|error| {
+            APWError::new(
+                Status::ProcessNotRunning,
+                format!("Failed writing native host frame header: {error}"),
+            )
+        })?;
+    stream.write_all(payload).await.map_err(|error| {
+        APWError::new(
+            Status::ProcessNotRunning,
+            format!("Failed writing native host frame: {error}"),
+        )
+    })?;
+    stream.flush().await.map_err(|error| {
+        APWError::new(
+            Status::ProcessNotRunning,
+            format!("Failed flushing native host frame: {error}"),
+        )
+    })?;
+    Ok(())
+}
+
+fn persist_native_waiting(host: &str, port: u16, runtime_mode: RuntimeMode) -> Result<()> {
+    write_config(WriteConfigInput {
+        port: Some(port),
+        host: Some(host.to_string()),
+        allow_empty: true,
+        clear_auth: true,
+        runtime_mode: Some(runtime_mode),
+        bridge_status: Some(BRIDGE_STATUS_WAITING.to_string()),
+        bridge_browser: Some("native".to_string()),
+        bridge_connected_at: None,
+        bridge_last_error: None,
+        reset_launch_metadata: true,
+        reset_bridge_metadata: true,
+        refresh_created_at: false,
+        ..WriteConfigInput::default()
+    })?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn verify_native_host_peer(stream: &UnixStream) -> Result<()> {
+    let fd = stream.as_raw_fd();
+    let mut peer_uid: libc::uid_t = 0;
+    let mut peer_gid: libc::gid_t = 0;
+    let status = unsafe { libc::getpeereid(fd, &mut peer_uid, &mut peer_gid) };
+    if status != 0 {
+        return Err(APWError::new(
+            Status::ProcessNotRunning,
+            format!(
+                "Failed to verify native host peer credentials: {}",
+                std::io::Error::last_os_error()
+            ),
+        ));
+    }
+
+    let current_uid = unsafe { libc::geteuid() };
+    if peer_uid != current_uid {
+        return Err(APWError::new(
+            Status::ProcessNotRunning,
+            "Native host peer UID mismatch.",
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn verify_native_host_peer(_stream: &UnixStream) -> Result<()> {
+    Ok(())
+}
+
+async fn run_native_host_accept_loop(bridge: BrowserBridge, listener: UnixListener) {
+    loop {
+        let (mut stream, _) = match listener.accept().await {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("Failed accepting native host connection: {error}");
+                continue;
+            }
+        };
+
+        if let Err(error) = verify_native_host_peer(&stream) {
+            eprintln!("{}", error.message);
+            continue;
+        }
+
+        let hello = match timeout(
+            Duration::from_millis(BRIDGE_ATTACH_TIMEOUT_MS),
+            read_native_host_frame(&mut stream),
+        )
+        .await
+        {
+            Ok(Ok(payload)) => payload,
+            Ok(Err(error)) => {
+                eprintln!("{}", error.message);
+                continue;
+            }
+            Err(_) => {
+                eprintln!("Timed out waiting for native host hello frame.");
+                continue;
+            }
+        };
+
+        let hello = match serde_json::from_slice::<BridgeFromBrowserMessage>(&hello) {
+            Ok(message) => message,
+            Err(error) => {
+                eprintln!("Malformed native host hello frame: {error}");
+                continue;
+            }
+        };
+
+        let identity = match hello {
+            BridgeFromBrowserMessage::Hello { browser, version } => version.unwrap_or(browser),
+            _ => {
+                eprintln!("Unexpected native host handshake message.");
+                continue;
+            }
+        };
+
+        let connection_id = BRIDGE_CONNECTION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let (sender, mut receiver) = mpsc::unbounded_channel::<BridgeToBrowserMessage>();
+        bridge.attach(connection_id, sender, identity.clone()).await;
+        eprintln!("APW native host attached ({identity}).");
+
+        loop {
+            tokio::select! {
+                Some(message) = receiver.recv() => {
+                    let payload = match serde_json::to_vec(&message) {
+                        Ok(payload) => payload,
+                        Err(error) => {
+                            bridge
+                                .mark_error(connection_id, format!("Failed to encode native host request: {error}"))
+                                .await;
+                            break;
+                        }
+                    };
+
+                    if let Err(error) = write_native_host_frame(&mut stream, &payload).await {
+                        bridge.mark_disconnected(connection_id, Some(error.message)).await;
+                        break;
+                    }
+                }
+                incoming = read_native_host_frame(&mut stream) => {
+                    let payload = match incoming {
+                        Ok(payload) => payload,
+                        Err(error) => {
+                            bridge.mark_disconnected(connection_id, Some(error.message)).await;
+                            break;
+                        }
+                    };
+
+                    let message = match serde_json::from_slice::<BridgeFromBrowserMessage>(&payload) {
+                        Ok(message) => message,
+                        Err(error) => {
+                            bridge.mark_error(connection_id, format!("Malformed native host response: {error}")).await;
+                            break;
+                        }
+                    };
+
+                    match message {
+                        BridgeFromBrowserMessage::Hello { .. } => {}
+                        BridgeFromBrowserMessage::Status { status, error } => {
+                            if status == BRIDGE_STATUS_ERROR {
+                                bridge
+                                    .mark_error(
+                                        connection_id,
+                                        error.unwrap_or_else(|| "Native host reported an unknown error.".to_string()),
+                                    )
+                                    .await;
+                                break;
+                            }
+                            if status == BRIDGE_STATUS_DISCONNECTED {
+                                bridge.mark_disconnected(connection_id, error).await;
+                                break;
+                            }
+                        }
+                        BridgeFromBrowserMessage::Response {
+                            request_id,
+                            ok,
+                            payload,
+                            code,
+                            error,
+                        } => {
+                            let result = if ok {
+                                Ok(payload.unwrap_or(Value::Null))
+                            } else {
+                                Err(APWError::new(
+                                    code.unwrap_or(Status::GenericError),
+                                    error.unwrap_or_else(|| "Native host request failed.".to_string()),
+                                ))
+                            };
+                            bridge.complete_response(&request_id, result).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn start_native_daemon_inner(options: DaemonOptions, host: String) -> Result<()> {
+    if !cfg!(target_os = "macos") {
+        return Err(APWError::new(
+            Status::ProcessNotRunning,
+            native_host_failure_message("APW native host is supported only on macOS."),
+        ));
+    }
+
+    let preflight = native_host_preflight_status(options.runtime_mode);
+    let preflight_status = preflight
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    if preflight_status != "ready" {
+        return Err(APWError::new(
+            Status::ProcessNotRunning,
+            native_host_failure_message("APW native host is not installed or not ready."),
+        ));
+    }
+
+    ensure_native_host_runtime_dir()?;
+    let requested_port = if options.port == 0 {
+        10_000
+    } else {
+        options.port
+    };
+    let socket_path = native_host_socket_path();
+    if socket_path.exists() {
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    let native_listener = UnixListener::bind(&socket_path).map_err(|error| {
+        APWError::new(
+            Status::GenericError,
+            format!(
+                "Failed to bind native host socket at {}: {error}",
+                socket_path.display()
+            ),
+        )
+    })?;
+
+    let listener = UdpSocket::bind((host.as_str(), requested_port))
+        .await
+        .map_err(|error| {
+            APWError::new(
+                Status::GenericError,
+                format!("Failed to bind UDP socket: {error}"),
+            )
+        })?;
+    let listener_port = requested_port;
+
+    if options.dry_run {
+        persist_native_waiting(&host, listener_port, options.runtime_mode)?;
+        return Ok(());
+    }
+
+    persist_native_waiting(&host, listener_port, options.runtime_mode)?;
+
+    let bridge = BrowserBridge::new(host.clone(), listener_port, options.runtime_mode);
+    let accept_loop = tokio::spawn(run_native_host_accept_loop(bridge.clone(), native_listener));
+
+    let attach = timeout(Duration::from_millis(BRIDGE_ATTACH_TIMEOUT_MS), async {
+        loop {
+            if bridge.snapshot().await.status == BRIDGE_STATUS_ATTACHED {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+
+    if attach.is_err() {
+        accept_loop.abort();
+        let _ = fs::remove_file(&socket_path);
+        return Err(APWError::new(
+            Status::ProcessNotRunning,
+            native_host_failure_message("APW native host did not attach before startup timed out."),
+        ));
+    }
+
+    eprintln!(
+        "APW daemon listening on {listener_port} (native mode). Run `apw host install` if needed. After `apw status --json` reports `host.status=attached`, run `apw auth`."
+    );
+
+    let mut request_buffer = vec![0_u8; MAX_FRAME_SIZE];
+    loop {
+        let (size, peer) = listener
+            .recv_from(&mut request_buffer)
+            .await
+            .map_err(|error| {
+                APWError::new(
+                    Status::GenericError,
+                    format!("Daemon receive failed: {error}"),
+                )
+            })?;
+
+        if size > MAX_HELPER_PAYLOAD {
+            let _ = send_envelope_to_client(
+                &listener,
+                peer,
+                Status::InvalidParam,
+                None,
+                Some("Request too large.".to_string()),
+            )
+            .await;
+            request_buffer.fill(0);
+            continue;
+        }
+
+        let request_slice = &request_buffer[..size];
+        let result = bridge
+            .enqueue_request(request_slice)
+            .await
+            .and_then(|payload| parse_helper_response_shape(&payload));
+
+        match result {
+            Ok(payload) => {
+                let _ =
+                    send_envelope_to_client(&listener, peer, Status::Success, Some(payload), None)
+                        .await;
+            }
+            Err(error) => {
+                let _ =
+                    send_envelope_to_client(&listener, peer, error.code, None, Some(error.message))
+                        .await;
+            }
+        }
+
+        request_buffer.fill(0);
+    }
+}
+
 async fn start_daemon_inner(
     options: DaemonOptions,
     manifest: Option<ManifestConfig>,
@@ -1538,6 +2251,9 @@ async fn start_daemon_inner(
 
     if options.runtime_mode == RuntimeMode::Browser {
         return start_browser_daemon_inner(options, host).await;
+    }
+    if options.runtime_mode == RuntimeMode::Native {
+        return start_native_daemon_inner(options, host).await;
     }
 
     let manifest = manifest.ok_or_else(|| {
@@ -1566,11 +2282,12 @@ async fn start_daemon_inner(
             return Ok(());
         }
 
+        let launch_error = context
+            .launch_error
+            .unwrap_or_else(helper_not_running_message);
         return Err(APWError::new(
             Status::ProcessNotRunning,
-            context
-                .launch_error
-                .unwrap_or_else(helper_not_running_message),
+            helper_preflight_failure_message(options.runtime_mode, &launch_error),
         ));
     }
 
@@ -1582,11 +2299,12 @@ async fn start_daemon_inner(
             {
                 write_config(input)?;
             }
+            let launch_error = context
+                .launch_error
+                .unwrap_or_else(helper_not_running_message);
             return Err(APWError::new(
                 Status::ProcessNotRunning,
-                context
-                    .launch_error
-                    .unwrap_or_else(helper_not_running_message),
+                helper_preflight_failure_message(options.runtime_mode, &launch_error),
             ));
         }
     };
@@ -1725,12 +2443,39 @@ async fn start_daemon_inner(
 pub async fn start_daemon(options: DaemonOptions) -> Result<()> {
     let mut options = options;
     options.runtime_mode = resolve_runtime_mode(options.runtime_mode);
-    let manifest = if options.runtime_mode == RuntimeMode::Browser {
+    let runtime_mode = options.runtime_mode;
+    let manifest = if matches!(
+        options.runtime_mode,
+        RuntimeMode::Browser | RuntimeMode::Native
+    ) {
         None
     } else {
-        Some(read_manifest()?)
+        Some(read_manifest().map_err(|error| {
+            APWError::new(
+                error.code,
+                helper_preflight_failure_message(runtime_mode, &error.message),
+            )
+        })?)
     };
-    start_daemon_inner(options, manifest).await
+    start_daemon_inner(options, manifest)
+        .await
+        .map_err(|error| {
+            let needs_launch_guidance = matches!(
+                error.code,
+                Status::ProcessNotRunning | Status::InvalidConfig | Status::CommunicationTimeout
+            ) || error.message.contains("manifest")
+                || error.message.contains("helper")
+                || error.message.contains("Runtime mode");
+
+            if needs_launch_guidance {
+                APWError::new(
+                    error.code,
+                    helper_preflight_failure_message(runtime_mode, &error.message),
+                )
+            } else {
+                error
+            }
+        })
 }
 
 #[cfg(test)]
@@ -2044,12 +2789,47 @@ mod tests {
 
     #[test]
     #[serial]
-    fn resolve_runtime_mode_auto_prefers_browser_on_macos_26() {
+    fn resolve_runtime_mode_auto_prefers_native_on_macos_26() {
         set_macos_major_override_for_tests(Some(26));
+        assert_eq!(resolve_runtime_mode(RuntimeMode::Auto), RuntimeMode::Native);
+        set_macos_major_override_for_tests(None);
+    }
+
+    #[test]
+    #[serial]
+    fn helper_preflight_resolves_auto_to_native_on_macos_26() {
+        set_macos_major_override_for_tests(Some(26));
+        let value = helper_preflight_status(RuntimeMode::Auto);
+
+        assert_eq!(value["configuredRuntimeMode"], json!(RuntimeMode::Auto));
+        assert_eq!(value["resolvedRuntimeMode"], json!(RuntimeMode::Native));
+        assert_eq!(value["launchStrategies"], json!(["native_host"]));
+        set_macos_major_override_for_tests(None);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn helper_preflight_reports_unsupported_platform_off_macos() {
+        let value = helper_preflight_status(RuntimeMode::Direct);
+
+        assert_eq!(value["supported"], json!(false));
+        assert_eq!(value["status"], json!("unsupported_platform"));
         assert_eq!(
-            resolve_runtime_mode(RuntimeMode::Auto),
-            RuntimeMode::Browser
+            value["error"],
+            json!("APW Helper manifest unsupported outside of macOS.")
         );
+        assert_eq!(value["launchStrategies"], json!(["direct"]));
+    }
+
+    #[test]
+    #[serial]
+    fn helper_preflight_failure_message_mentions_current_status() {
+        set_macos_major_override_for_tests(Some(26));
+        let message =
+            helper_preflight_failure_message(RuntimeMode::Auto, "Helper process is not running.");
+
+        assert!(message.contains("Helper process is not running."));
+        assert!(message.contains("daemon.preflight.status="));
         set_macos_major_override_for_tests(None);
     }
 
@@ -2527,7 +3307,9 @@ mod tests {
             ));
 
             assert!(result.is_err());
-            assert_eq!(result.unwrap_err().code, Status::ProcessNotRunning);
+            let error = result.unwrap_err();
+            assert_eq!(error.code, Status::ProcessNotRunning);
+            assert!(error.message.contains("daemon.preflight.status="));
 
             let config = wait_for_config(home, |value| {
                 value["lastLaunchStatus"] == json!(HELPER_LAUNCH_FAILED)

@@ -4,6 +4,10 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_PATH="$ROOT_DIR/rust/target/release/apw"
 SMOKE_ROOT="$ROOT_DIR/dist/host-smoke"
+EXTENSION_DIR="$ROOT_DIR/browser-bridge"
+EXTENSION_ID="ajefblkpgcffjgeaifmhaekckngflbak"
+HOST_NAME="dev.omt.apw.bridge.chromium"
+USER_CHROME_MANIFEST="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/${HOST_NAME}.json"
 PW_DOMAIN=""
 OTP_DOMAIN=""
 BIND_HOST="127.0.0.1"
@@ -109,6 +113,20 @@ command_ok_or_no_results() {
   [[ "$code" == "0" || "$code" == "3" ]]
 }
 
+manifest_value() {
+  local manifest_path="$1"
+  local key="$2"
+  if [[ ! -f "$manifest_path" ]]; then
+    echo "null"
+    return 0
+  fi
+  ruby -rjson -e '
+    payload = JSON.parse(File.read(ARGV[0]))
+    value = payload[ARGV[1]]
+    puts(value.nil? ? "null" : value)
+  ' "$manifest_path" "$key"
+}
+
 capture_command() {
   local name="$1"
   shift
@@ -161,7 +179,40 @@ while (( SECONDS < deadline )); do
 done
 
 if [[ ! -f "$EVIDENCE_DIR/status.bridge-attached.json" ]]; then
-  echo "Chrome bridge did not attach within ${BRIDGE_TIMEOUT_SECONDS}s." | tee "$EVIDENCE_DIR/summary.txt"
+  "$BIN_PATH" status --json >"$EVIDENCE_DIR/status.bridge-timeout.json"
+  bridge_status="$(status_value "$EVIDENCE_DIR/status.bridge-timeout.json" "payload.bridge.status")"
+  preflight_status="$(status_value "$EVIDENCE_DIR/status.bridge-timeout.json" "payload.daemon.preflight.status")"
+  manifest_host_name="$(manifest_value "$USER_CHROME_MANIFEST" "name")"
+  manifest_helper_path="$(manifest_value "$USER_CHROME_MANIFEST" "path")"
+  manifest_exists=0
+  helper_executable=0
+  if [[ -f "$USER_CHROME_MANIFEST" ]]; then
+    manifest_exists=1
+  fi
+  if [[ "$manifest_helper_path" != "null" && -x "$manifest_helper_path" ]]; then
+    helper_executable=1
+  fi
+  {
+    echo "Chrome bridge did not attach within ${BRIDGE_TIMEOUT_SECONDS}s."
+    echo "Evidence directory: $EVIDENCE_DIR"
+    echo "Bridge status: $bridge_status"
+    echo "daemon.preflight.status: $preflight_status"
+    echo "User Chrome native messaging manifest exists: $manifest_exists"
+    echo "User Chrome native messaging manifest path: $USER_CHROME_MANIFEST"
+    echo "User manifest host name: $manifest_host_name"
+    echo "User manifest helper path: $manifest_helper_path"
+    echo "User manifest helper executable: $helper_executable"
+    echo "Expected unpacked extension dir: $EXTENSION_DIR"
+    echo "Expected extension ID: $EXTENSION_ID"
+    echo
+    echo "Remediation:"
+    echo "  1. Open chrome://extensions"
+    echo "  2. Enable Developer mode"
+    echo "  3. Load unpacked extension from: $EXTENSION_DIR"
+    echo "  4. Confirm the extension ID is: $EXTENSION_ID"
+    echo "  5. Open the extension popup and confirm host=$BIND_HOST port=$PORT"
+    echo "  6. Re-run this smoke script"
+  } | tee "$EVIDENCE_DIR/summary.txt"
   exit 1
 fi
 

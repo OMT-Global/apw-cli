@@ -1,72 +1,96 @@
-# Rust Migration and Parity Guide
+# Rust migration and parity
 
-This repository has completed migration to Rust as the active implementation.
-The canonical runtime is `rust/`.
+APW now treats the Rust implementation as the only supported runtime and release
+path.
 
 Release reference version: `v1.2.0`
 
-## Version policy
+## Current maintenance policy
 
-- Merge-safe patch PRs (tests/docs/hardening only): bump patch versions.
-- Feature/compatibility-impacting PRs: bump minor versions.
-- Never reuse or regress below the highest existing repository tag.
+- Supported implementation: [`rust/`](/Users/johnteneyckjr./src/apw/rust)
+- Archived implementation: [`legacy/deno/`](/Users/johnteneyckjr./src/apw/legacy/deno)
+- Packaging, release, fixes, and hardening land only in Rust
+- The Deno archive exists for historical inspection and compatibility review only
 
-Merge checklist:
+Archive rules: [docs/ARCHIVE_POLICY.md](/Users/johnteneyckjr./src/apw/docs/ARCHIVE_POLICY.md)
 
-- bump version in all policy sources and run `./.github/scripts/verify-version-sync.sh ...`.
-- build a release binary and confirm `./rust/target/release/apw --version` and `apw status --json` report expected release shape.
-- ensure the release tag is `v<version>` (for example `v1.2.0`) before pushing.
+## Parity target
 
-## What is archived
+The compatibility target is the public command contract from the historical Deno
+CLI, not the old implementation details.
 
-- Legacy Deno implementation: `legacy/deno/`
-- Historical lockfile and dependencies: `legacy/deno/deno.lock`
+Rust currently covers the same operational surface for:
 
-`legacy/deno/` is intentionally frozen. It should be used for behavioral
-reference only.
+- `auth request`
+- `auth response`
+- `auth logout`
+- `status`
+- `start`
+- `pw list`
+- `pw get`
+- `otp list`
+- `otp get`
 
-Archive policy:
+The default human-facing command behavior remains the contract. Structured output
+and diagnostics are additive behind explicit JSON/status surfaces.
 
-- `legacy/deno/` is immutable by default and should not receive feature work.
-- Maintenance, packaging, and release changes belong only in the Rust implementation.
-- Deno tests should be run manually and only for audit/compatibility review.
+## Known compatibility framing
 
-Canonical archive path and governance: [`docs/ARCHIVE_POLICY.md`](docs/ARCHIVE_POLICY.md).
+- On modern macOS, `auto` resolves to native companion-host mode because direct
+  helper launch is not always permitted from the CLI parent process.
+- This is treated as an operational compatibility bridge, not a removal of CLI
+  behavior.
+- Direct and launchd-compatible native helper paths remain available as explicit
+  diagnostic modes.
 
-## Parity surface covered by Rust
+## Automated parity coverage
 
-- Auth flows: `auth request`, `auth response`, `auth logout`
-- Session/runtime introspection: `status`
-- Password flows: `start`, `pw list`, `pw get`
-- OTP flows: `otp list`, `otp get`
-- CLI output modes: human output plus `--json` where implemented
+Primary Rust gates:
 
-## Running parity checks
+```bash
+cargo fmt --manifest-path rust/Cargo.toml -- --check
+cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --all-targets
+```
 
-1. Use a temporary home for each implementation to avoid shared state.
-2. Run the Rust tests:
-   - `cargo test --manifest-path rust/Cargo.toml`
-3. Run Rust parity harness against archived fixtures:
-   - `cargo test --manifest-path rust/Cargo.toml --test legacy_parity`
-4. (Optional) If you still have Deno available and need a direct re-run of the archived
-   implementation, run:
-   - `cd legacy/deno`
-   - `deno test --allow-env --allow-read --allow-write --allow-net src/*.test.ts`
-4. For manual command parity, run equivalent commands in each tool and compare
-   success/error envelopes.
+Legacy parity harness:
 
-## Distribution targets
+```bash
+cargo test --manifest-path rust/Cargo.toml --test legacy_parity
+```
 
-- Homebrew fork flow (recommended for users): create a tap/formula in your fork and
-  install with `brew install <you>/apw/apw`.
-- Source release flow: `cargo build --manifest-path rust/Cargo.toml --release`
-  and publish `rust/target/release/apw`.
+The parity suite exercises the Rust CLI against preserved legacy fixtures for:
 
-## Recommended handoff workflow
+- auth request shape
+- auth response failure mapping
+- status JSON shape
+- password and OTP query behavior
+- command matrix expectations
 
-When you fork this project, keep `legacy/deno/` intact for a historical
-compatibility reference while making `rust/` the only maintained delivery
-path.
+## Optional archive audit
 
-Before cutting a fork tag, run the security regression matrix in
-`docs/SECURITY_POSTURE_AND_TESTING.md` in addition to the legacy parity checklist.
+If you still have Deno installed and want a direct historical spot-check, the
+archived implementation can be run manually:
+
+```bash
+cd legacy/deno
+deno test --allow-env --allow-read --allow-write --allow-net src/*.test.ts
+```
+
+This is an audit path only. It is not part of the supported runtime or release
+flow.
+
+## Release expectations
+
+Before tagging a public release:
+
+1. Keep versioned surfaces in sync
+2. Run the Rust gates
+3. Run the parity harness
+4. Run the security regression matrix
+5. Publish only from the Rust path
+
+Related docs:
+
+- [docs/INSTALLATION.md](/Users/johnteneyckjr./src/apw/docs/INSTALLATION.md)
+- [docs/SECURITY_POSTURE_AND_TESTING.md](/Users/johnteneyckjr./src/apw/docs/SECURITY_POSTURE_AND_TESTING.md)

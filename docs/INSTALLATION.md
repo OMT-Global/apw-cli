@@ -1,83 +1,109 @@
-## APW (Rust) Installation and Local Run Guide
+# Installation and operation
 
-This repo ships a Rust-native CLI/daemon (`rust/` workspace). The legacy TypeScript/Deno
-implementation is retained as a read-only archive under `legacy/deno/`.
-See [docs/ARCHIVE_POLICY.md](docs/ARCHIVE_POLICY.md) for the canonical archive rules.
+APW ships as a Rust-native CLI and daemon. The supported executable name is
+`apw`.
 
 Release reference version: `v1.2.0`
 
-## 1) Build and install from source
+## Platform support
+
+- Supported: macOS
+- Preferred runtime on macOS 26.x: native companion host mode
+- Unsupported: non-macOS platforms
+
+When run on an unsupported platform, APW fails fast with an explicit error
+instead of attempting degraded behavior.
+
+## Install from source
+
+From the repository root:
 
 ```bash
-cd /Users/<you>/src/omt-global/apw-native
 cargo build --manifest-path rust/Cargo.toml --release
+./scripts/build-native-host.sh
 ```
 
-### Install binary manually
+The resulting binary is:
+
+```text
+rust/target/release/apw
+```
+
+### Install manually
 
 ```bash
-cp rust/target/release/apw /usr/local/bin/apw
+install -m 0755 rust/target/release/apw /usr/local/bin/apw
+# run from the source checkout so apw can find native-host/dist/APWNativeHost.app
+apw host install
 ```
 
 ### Install with Cargo
 
 ```bash
-cargo install --path rust
-```
-
-or
-
-```bash
 cargo install --path rust --locked
+./scripts/build-native-host.sh
+apw host install
 ```
 
-## 2) Homebrew distribution path (recommended for ongoing maintenance)
+## Homebrew
 
-### Local formula install
+### Local formula smoke test
 
-Use the local smoke installer script to validate Homebrew installation from this
-checkout:
+To validate the bundled formula from this checkout:
 
 ```bash
 ./packaging/homebrew/install-from-source.sh
 ```
 
-The script creates a temporary tap, builds a source archive, installs, validates
-`apw --version` and `apw status --json`, then cleans up automatically.
+This validates:
 
-Once you publish a release with a real tap, use the formula in
-`packaging/homebrew/apw.rb` with a concrete release `url`/`sha256`.
+- source archive creation
+- formula install path
+- native host bundle packaging
+- `apw --version`
+- `apw status --json`
 
-### Remote fork tap (recommended once you publish a release)
+### Publish your own tap
 
-1. Fork a tap repo like `github.com/omt-global/homebrew-apw-native`.
-2. Add a formula at `Formula/apw.rb` from this project’s template.
-3. Fill release details (`url` + `sha256`) for the tag you publish.
-4. Publish and run:
+Use [`packaging/homebrew/apw.rb`](/Users/johnteneyckjr./src/apw/packaging/homebrew/apw.rb)
+as the formula template.
+
+Typical public flow:
+
+1. Publish a tagged release
+2. Update formula `url`, `sha256`, and `version`
+3. Push the formula to your tap
+4. Install with:
 
 ```bash
-brew tap <you>/apw-native
-brew install <you>/apw-native/apw-native
+brew tap <owner>/apw-native
+brew install <owner>/apw-native/apw
+```
+
+After installing with Homebrew, install the per-user native host bundle:
+
+```bash
+apw host install
+```
+
+If you want Homebrew to manage the daemon lifecycle after host install:
+
+```bash
 brew services start apw
 ```
 
-## 3) Run the app
+## Native host setup on macOS 26.x
 
-### Install the Chrome bridge on macOS 26.x
+On macOS 26.x, the default runtime is the native companion host. Install the
+per-user app bundle and LaunchAgent before expecting end-to-end auth or
+data-plane commands to work.
 
 ```bash
-./scripts/install-browser-bridge.sh
+apw host install
+apw host doctor --json
 ```
 
-Then open `chrome://extensions`, enable Developer mode, and load the unpacked
-extension from:
-
-```text
-browser-bridge/
-```
-
-The extension defaults to `127.0.0.1:10000`. If you intentionally start `apw`
-on a different bind or port, update the extension popup to match.
+## Start and authenticate
 
 ### Start the daemon
 
@@ -85,145 +111,106 @@ on a different bind or port, update the extension popup to match.
 apw start
 ```
 
-Optional bind/port override:
+Optional bind override:
 
 ```bash
 apw start --bind 127.0.0.1 --port 10000
 ```
 
-### Authenticate
-
-```bash
-apw auth
-```
-
-Non-interactive PIN:
-
-```bash
-apw auth --pin 123456
-```
-
-### Check daemon/session status
+### Check health
 
 ```bash
 apw status
 apw status --json
 ```
 
-## 4) Verify you’re healthy
+Healthy native-host state usually looks like:
+
+1. `daemon.runtimeMode = "native"`
+2. `host.status = "attached"`
+3. `daemon.preflight.status = "ready"`
+
+### Authenticate interactively
+
+```bash
+apw auth
+```
+
+### Authenticate non-interactively
+
+```bash
+apw auth --pin 123456
+```
+
+### Explicit request/response auth flow
+
+```bash
+apw auth request
+apw auth response --pin 123456 --salt <salt> --server_key <server_key> --client_key <client_key> --username <username>
+```
+
+## Diagnostics
+
+### Machine-readable status
 
 ```bash
 apw status --json
 ```
 
-Expected healthy shape includes:
+Important fields:
 
-- `daemon.host` and `daemon.port`
-- `bridge.status`, `bridge.browser`, `bridge.connectedAt`
-- `session.authenticated`
+- `daemon.host`
+- `daemon.port`
+- `daemon.runtimeMode`
+- `daemon.lastLaunchStatus`
+- `daemon.lastLaunchError`
+- `daemon.lastLaunchStrategy`
+- `daemon.preflight`
+- `host.status`
+- `host.connectedAt`
+- `host.bundleVersion`
+- `host.lastError`
+- `bridge.status`
+- `bridge.browser`
+- `bridge.connectedAt`
+- `bridge.lastError`
+- `session.username`
 - `session.createdAt`
 - `session.expired`
+- `session.authenticated`
 
-## 5) One-command local parity test
+`daemon.preflight` is the public diagnostics block for runtime decisions. It
+includes resolved mode, candidate launch strategies, native host socket and
+LaunchAgent checks, app bundle checks, helper binary checks, and a structured
+failure reason when the native host cannot work on the current host.
 
-```bash
-cargo test --manifest-path rust/Cargo.toml
-```
+### Direct helper launch diagnostics
 
-For regression checks against the frozen Deno archive (optional, requires Deno CLI):
-
-```bash
-cargo test --manifest-path rust/Cargo.toml --test legacy_parity
-```
-
-### Browser-backed helper workflow (macOS 26)
-
-On macOS 26.x, `apw start` defaults to browser mode. The daemon starts a local
-UDP listener for the CLI plus a loopback WebSocket bridge on the same numeric
-port. The Chrome extension then attaches through native messaging and forwards
-requests to Apple’s helper.
-
-Healthy status flow looks like:
-
-1. `apw start`
-2. `apw status --json`
-   - `daemon.runtimeMode = "browser"`
-   - `bridge.status = "waiting"`
-3. Load the Chrome bridge extension or let it reconnect automatically
-4. `apw status --json`
-   - `bridge.status = "attached"`
-   - `bridge.browser = "chrome"`
-5. `apw auth`
-6. `apw status --json`
-   - `session.authenticated = true`
-
-If you try `apw auth`, `apw pw list`, or `apw otp list` before Chrome attaches,
-the CLI now returns `ProcessNotRunning` with browser-specific remediation that
-points back to the extension and `bridge.status=attached`.
-
-### Legacy direct-launch diagnostics
-
-Direct CLI helper launch is still supported as an explicit diagnostic mode:
+Use this to confirm whether the host allows direct native helper launch:
 
 ```bash
 apw start --runtime-mode direct --dry-run
+apw status --json
 ```
 
-If the host still reports:
+If the host reports a direct helper failure such as a code-signature or parent
+process constraint, stay on the native-host path and use `apw host doctor`.
 
-- `Helper process was terminated by SIGKILL (Code Signature Constraint Violation).`
+## Development and release checks
 
-then the OS is rejecting the direct-parent path and you should stay on the
-browser-backed workflow above. `apw status --json` continues to preserve
-`daemon.lastLaunchStatus`, `daemon.lastLaunchError`, and
-`daemon.lastLaunchStrategy` for those explicit direct/launchd diagnostic runs.
-
-## 6) Fork release workflow
-
-This repo includes a release workflow at:
-
-```text
-.github/workflows/release.yml
-```
-
-For a local full release bootstrap (format, lint, tests, build, tag, smoke), use:
+Recommended local gates before publishing:
 
 ```bash
+cargo fmt --manifest-path rust/Cargo.toml -- --check
+cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --all-targets
+cargo build --manifest-path rust/Cargo.toml --release
+```
+
+Optional parity and release helpers:
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test legacy_parity
 ./scripts/release-bootstrap.sh
-```
-
-To include the real browser-backed helper smoke in that release gate:
-
-```bash
 ./scripts/release-bootstrap.sh --host-smoke --pw-domain example.com
-./scripts/release-bootstrap.sh --host-smoke --pw-domain example.com --otp-domain example.com
 ```
-
-The host smoke writes a timestamped evidence bundle under:
-
-```text
-dist/host-smoke/<timestamp>/
-```
-
-Optional:
-
-```bash
-./scripts/release-bootstrap.sh --tag v1.2.0 --push
-./scripts/release-bootstrap.sh --skip-tests --skip-brew-smoke
-./scripts/release-bootstrap.sh --tag v1.2.1 --push --publish
-```
-
-For `--publish`:
-
-- `gh` CLI must be logged in (`gh auth login`).
-- A tarball is generated at `dist/apw-macos-<version>.tar.gz`.
-- `packaging/homebrew/apw.rb` is validated so its `url` points to the same tag before publish.
-
-Current release behavior (tag-triggered):
-
-- runs format/lint/tests
-- builds release binary
-- runs `apw --version` and `apw status --json` checks
-- optionally runs the browser-backed host smoke (`scripts/browser-host-smoke.sh`)
-- builds a local source tarball and runs a Homebrew smoke install test
-- publishes `dist/apw-macos-vX.X.X.tar.gz` as release assets

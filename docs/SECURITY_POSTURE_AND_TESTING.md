@@ -1,116 +1,99 @@
-# Security posture and test matrix (Rust)
+# Security posture and testing
 
-This document tracks security-focused runtime checks and the validation commands to
-run before publishing a forked release.
+This document describes the current security posture of the Rust implementation
+and the release checks expected before publishing binaries or a Homebrew formula.
 
-## 1) Rust security gates
+Release reference version: `v1.2.0`
 
-Run these in order:
+## Security posture
+
+### Config and secret handling
+
+- config lives in `~/.apw/config.json`
+- `~/.apw` is created with mode `0700`
+- `config.json` is written atomically with mode `0600`
+- malformed, stale, or schema-invalid config is rejected and cleared
+- on supported macOS paths, session secret material is kept in the user keychain
+
+### Session lifecycle
+
+- persisted session metadata includes `createdAt`
+- expired sessions force re-authentication
+- failed launch state is preserved so follow-up commands report the real runtime
+  failure before a misleading session error
+
+### Transport and parser hardening
+
+- bounded message sizes
+- typed status/error envelopes
+- timeout handling and retry behavior in the client
+- helper frame validation before JSON decode
+- malformed helper payloads and invalid response schemas map to explicit errors
+
+### Runtime bridge hardening
+
+- native-host attach/disconnect state is persisted
+- `status --json` exposes `host`, deprecated `bridge`, and `daemon.preflight` diagnostics
+- direct helper launch failures remain visible through `lastLaunch*` metadata
+
+## Required release gates
+
+Run these before publishing:
 
 ```bash
 cargo fmt --manifest-path rust/Cargo.toml -- --check
 cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path rust/Cargo.toml
-cargo build --manifest-path rust/Cargo.toml --release
-cd browser-bridge && npm test
-```
-
-## 2) Security-focused regression suite
-
-The following integration cases are now covered by `rust/tests/security_regressions.rs`:
-
-- `command_invalid_pin_is_rejected_without_network`
-  - `apw --json auth --pin 12ab` returns `InvalidParam` before transport use.
-- `command_invalid_url_rejected_before_auth_dependency`
-  - `apw --json pw list "bad host"` does not attempt daemon contact.
-- `status_json_has_stable_shape`
-  - verifies machine-readable status schema with known keys and types.
-- `status_binary_with_nonexistent_home_directory_isolated`
-  - status command survives unusual `HOME` values.
-- `pw_list_reports_failed_launch_state_before_invalid_session`
-  - launch failure diagnostics win over misleading session errors.
-- `status_json_preserves_failed_launch_metadata_after_command_failure`
-  - launch metadata remains visible after follow-up command failures.
-
-Targeted helper/parser security tests also run in unit tests:
-
-- oversized/invalid config payload protection
-- manifest/object shape guards
-- signed envelope parsing guards
-- PIN normalization and URL parsing hardening
-- framed payload length and status mapping guards
-- browser bridge attach/disconnect persistence and request forwarding guards
-- browser-mode missing-bridge and native-host error mapping guards
-
-## 3) Browser bridge tests
-
-The Chrome companion extension is a self-contained package under `browser-bridge/`.
-Its local unit coverage runs with the Node built-in test runner:
-
-```bash
-cd browser-bridge
-npm test
-```
-
-Current coverage focuses on:
-
-- native host connect/disconnect lifecycle
-- daemon request queueing and response/request-id correlation
-- reconnect after daemon WebSocket restart
-- forwarding helper error envelopes verbatim
-- malformed native payload handling
-
-## 4) Manual compatibility checks
-
-Manual command parity checks are still required for edge behavior:
-
-```bash
+cargo test --manifest-path rust/Cargo.toml --all-targets
 cargo test --manifest-path rust/Cargo.toml --test legacy_parity
+cargo build --manifest-path rust/Cargo.toml --release
+./scripts/build-native-host.sh
 ```
 
-When Deno is available, you can additionally compare output envelopes against the
-archived `legacy/deno` implementation for:
+## Security-focused regression coverage
 
-- `status --json`
-- `auth request`
-- `auth response`
-- `pw list/get`
-- `otp list/get`
+The Rust test suite already covers:
 
-## 5) Distribution checks
+- invalid PIN rejection before transport use
+- invalid URL rejection before auth dependency
+- stable JSON status shape
+- launch failure precedence over session errors
+- helper/parser malformed payload rejection
+- oversized config and oversized helper payload handling
+- native-host attach/disconnect and error propagation
+- SRP message validation and proof verification checks
 
-For release validation, keep:
+The dedicated integration target is:
 
 ```bash
-./packaging/homebrew/install-from-source.sh
+cargo test --manifest-path rust/Cargo.toml --test security_regressions
 ```
 
-This validates:
-- source tarball build
-- formula install path
-- `apw --version`
-- `apw status --json`
+## Manual host validation
 
-For the real browser-backed helper path, use the local host smoke:
+Some risk remains host-specific and should be checked on the real target macOS
+machine:
 
 ```bash
 ./scripts/browser-host-smoke.sh --pw-domain example.com
 ```
 
-It writes a timestamped evidence bundle under `dist/host-smoke/<timestamp>/`
-containing daemon logs, status snapshots, auth output, `pw`/`otp` results, and
-helper crash-report diffs.
+This writes a timestamped evidence bundle under:
 
-## 6) Ongoing cadence
+```text
+dist/host-smoke/<timestamp>/
+```
 
-- Run the above on every release tag.
-- Keep `legacy/deno` as a read-only reference.
-- Record any divergence in `docs/MIGRATION_AND_PARITY.md` before release.
+Recommended contents to review:
 
-## 7) Legacy archive governance
+- daemon startup logs
+- `status --json` snapshots
+- auth output
+- password and OTP query results
+- helper crash or launch diagnostics
 
-- `legacy/deno/` is an archived reference only. Canonical path and constraints are
-  defined in [docs/ARCHIVE_POLICY.md](docs/ARCHIVE_POLICY.md).
-- No security hardening, regression fixes, or behavior changes should be implemented there.
-- Deno usage is optional and intended only for compatibility audit and historical
-  comparison in release reviews.
+## Archive policy
+
+The Deno implementation is archived and not part of the supported security
+surface. Use it only for compatibility audit work.
+
+Archive rules: [docs/ARCHIVE_POLICY.md](/Users/johnteneyckjr./src/apw/docs/ARCHIVE_POLICY.md)
