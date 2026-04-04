@@ -3,7 +3,11 @@ use crate::host::{
     ensure_native_host_runtime_dir, native_host_failure_message, native_host_preflight_status,
     native_host_runtime_supported, native_host_socket_path, native_host_status_note,
 };
-use crate::types::{APWResponseEnvelope, Command, ManifestConfig, Message, RuntimeMode, Status};
+use crate::types::{
+    APWResponseEnvelope, Command, ManifestConfig, Message, RuntimeMode, Status,
+    BRIDGE_STATUS_ATTACHED, BRIDGE_STATUS_DISCONNECTED, BRIDGE_STATUS_ERROR, BRIDGE_STATUS_WAITING,
+    MAX_MESSAGE_BYTES,
+};
 use crate::utils::{write_config, WriteConfigInput};
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
@@ -37,17 +41,13 @@ const LAUNCH_PROBE_TIMEOUT_MS: u64 = 1_000;
 const LAUNCH_PROBE_RESPONSE_TIMEOUT_MS: u64 = 5_000;
 const PROCESS_STATUS_RETRY_LIMIT: u8 = 40;
 const PROCESS_STATUS_RETRY_DELAY_MS: u64 = 25;
-const MAX_HELPER_PAYLOAD: usize = 16 * 1024;
+const MAX_HELPER_PAYLOAD: usize = MAX_MESSAGE_BYTES;
 const MAX_FRAME_SIZE: usize = 4 + MAX_HELPER_PAYLOAD;
 const HELPER_LAUNCH_OK: &str = "ok";
 const HELPER_LAUNCH_FAILED: &str = "failed";
 const HELPER_LAUNCH_DISABLED: &str = "disabled";
 const HELPER_NOT_CONFIGURED: &str = "Helper launch metadata is not configured.";
 const LAUNCHCTL_PATH: &str = "/bin/launchctl";
-const BRIDGE_STATUS_WAITING: &str = "waiting";
-const BRIDGE_STATUS_ATTACHED: &str = "attached";
-const BRIDGE_STATUS_DISCONNECTED: &str = "disconnected";
-const BRIDGE_STATUS_ERROR: &str = "error";
 const BRIDGE_ATTACH_TIMEOUT_MS: u64 = 5_000;
 #[cfg(target_os = "macos")]
 const MANIFEST_PATHS: [&str; 2] = [

@@ -68,8 +68,10 @@ done
 failed=0
 while IFS= read -r file; do
   for pattern in "${patterns[@]}"; do
-    if grep -E -n "$pattern" "$file" >/dev/null 2>&1; then
-      echo "Potential secret pattern '$pattern' found in $file" >&2
+    if grep -E -q "$pattern" "$file" 2>/dev/null; then
+      grep -E -n "$pattern" "$file" 2>/dev/null | while IFS= read -r match; do
+        echo "Potential secret pattern '$pattern' found in $file:$match" >&2
+      done
       failed=1
     fi
   done

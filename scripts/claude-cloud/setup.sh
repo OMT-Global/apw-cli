@@ -1,7 +1,7 @@
-    #!/usr/bin/env bash
-    set -euo pipefail
+#!/usr/bin/env bash
+set -euo pipefail
 
-    if ! command -v gh >/dev/null 2>&1; then
+if ! command -v gh >/dev/null 2>&1; then
   apt-get update
   apt-get install -y gh
 fi

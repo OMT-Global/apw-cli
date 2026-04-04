@@ -10,7 +10,7 @@ chmod +x ./.github/scripts/verify-version-sync.sh
 ./.github/scripts/verify-version-sync.sh \
   rust/Cargo.toml \
   rust/src/cli.rs \
-  rust/src/main.rs \
+  rust/src/types.rs \
   packaging/homebrew/apw.rb \
   README.md \
   docs/INSTALLATION.md \

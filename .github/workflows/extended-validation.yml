@@ -40,11 +40,9 @@ jobs:
         id: preset
         if: github.event_name != 'push'
         run: |
-          cat >>"$GITHUB_OUTPUT" <<'EOF'
-          app=true
-          ci=true
-          extended=true
-          EOF
+          echo "app=true" >> "$GITHUB_OUTPUT"
+          echo "ci=true" >> "$GITHUB_OUTPUT"
+          echo "extended=true" >> "$GITHUB_OUTPUT"
 
       - uses: dorny/paths-filter@v3
         id: filter

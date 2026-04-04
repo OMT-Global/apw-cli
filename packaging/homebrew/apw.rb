@@ -6,11 +6,9 @@ class Apw < Formula
   sha256 "<replace-with-release-tarball-sha256>"
   license "GPL-3.0-only"
 
+  depends_on :macos
   depends_on "rust" => :build
-
-  on_macos do
-    # APW v2 requires a local macOS app bundle.
-  end
+  depends_on "openssl@3" => :build
 
   def install
     system "bash", "./scripts/build-native-app.sh"

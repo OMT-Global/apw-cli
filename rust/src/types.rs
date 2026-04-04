@@ -13,8 +13,15 @@ use std::fmt;
 
 pub const DEFAULT_HOST: &str = "127.0.0.1";
 pub const DEFAULT_PORT: u16 = 10_000;
-pub const VERSION: &str = "2.0.0";
-pub const MAX_MESSAGE_BYTES: usize = 16 * 1024;
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Maximum payload size shared by the daemon frame reader and the native-app broker.
+/// Both sides must agree on this limit; changing it requires updating both channels.
+pub const MAX_MESSAGE_BYTES: usize = 32 * 1024;
+/// Shared bridge status strings used by both the client and daemon.
+pub const BRIDGE_STATUS_WAITING: &str = "waiting";
+pub const BRIDGE_STATUS_ATTACHED: &str = "attached";
+pub const BRIDGE_STATUS_DISCONNECTED: &str = "disconnected";
+pub const BRIDGE_STATUS_ERROR: &str = "error";
 const CONFIG_SCHEMA: i32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

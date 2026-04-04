@@ -30,6 +30,7 @@ struct CredentialsFile: Codable {
     let password: String
   }
 
+  var demo: Bool?
   let domains: [String]
   let credentials: [Entry]
 }
@@ -380,6 +381,7 @@ final class BrokerServer {
       return
     }
     let content = CredentialsFile(
+      demo: true,
       domains: ["example.com"],
       credentials: [
         .init(
@@ -393,11 +395,21 @@ final class BrokerServer {
     let data = try JSONEncoder().encode(content)
     try data.write(to: paths.credentialsPath, options: [.atomic])
     chmod(paths.credentialsPath.path, statusFileMode)
+    fputs(
+      "apw: info: created demo credentials file at \(paths.credentialsPath.path). "
+        + "This file contains placeholder credentials — replace them with real entries before use.\n",
+      stderr)
   }
 
   private func removeStaleSocket() throws {
-    if FileManager.default.fileExists(atPath: paths.socketPath.path) {
-      try FileManager.default.removeItem(at: paths.socketPath)
+    // Use unlink() directly rather than a check-then-remove pattern to avoid a TOCTOU
+    // race where a symlink could be placed at the socket path between the existence
+    // check and the removal. unlink() is atomic; ENOENT is not an error here.
+    let result = unlink(paths.socketPath.path)
+    if result != 0 && errno != ENOENT {
+      throw NSError(
+        domain: NSPOSIXErrorDomain, code: Int(errno),
+        userInfo: [NSLocalizedDescriptionKey: "Failed to remove stale socket"])
     }
   }
 

@@ -1,7 +1,7 @@
-    #!/usr/bin/env bash
-    set -euo pipefail
+#!/usr/bin/env bash
+set -euo pipefail
 
-    if [[ -f package-lock.json ]]; then
+if [[ -f package-lock.json ]]; then
   npm ci --prefer-offline --no-audit --no-fund
 elif [[ -f pnpm-lock.yaml ]]; then
   corepack enable

@@ -11,8 +11,6 @@ mod srp;
 mod types;
 mod utils;
 
-const APP_VERSION: &str = "2.0.0";
-
 use cli::{run, Cli};
 use client::ApplePasswordManager;
 use std::env;
@@ -20,13 +18,6 @@ use std::process;
 
 #[tokio::main]
 async fn main() {
-    if APP_VERSION != env!("CARGO_PKG_VERSION") {
-        eprintln!(
-            "Version mismatch; please run cargo fmt and verify version sync files before release."
-        );
-        process::exit(1);
-    }
-
     let raw_args: Vec<String> = env::args().collect();
     let normalized_args = normalize_legacy_args(raw_args);
     let args = Cli::parse_from(normalized_args);

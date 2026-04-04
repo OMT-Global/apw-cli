@@ -1,5 +1,5 @@
 use crate::error::{APWError, Result};
-use crate::types::{Status, VERSION};
+use crate::types::{Status, MAX_MESSAGE_BYTES, VERSION};
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
@@ -18,20 +18,28 @@ const NATIVE_APP_STATUS_NAME: &str = "status.json";
 const NATIVE_APP_CREDENTIALS_NAME: &str = "credentials.json";
 const NATIVE_APP_RUNTIME_DIR_MODE: u32 = 0o700;
 const NATIVE_APP_FILE_MODE: u32 = 0o600;
-const MAX_BROKER_BYTES: usize = 32 * 1024;
+const MAX_BROKER_BYTES: usize = MAX_MESSAGE_BYTES;
 const SOCKET_TIMEOUT_MS: u64 = 3_000;
 const CONNECT_RETRIES: usize = 10;
 const CONNECT_RETRY_DELAY_MS: u64 = 200;
 
 fn home_dir() -> PathBuf {
-    PathBuf::from(
-        env::var("HOME")
-            .unwrap_or_else(|_| env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string())),
-    )
+    match env::var("HOME").or_else(|_| env::var("USERPROFILE")) {
+        Ok(dir) => PathBuf::from(dir),
+        Err(_) => {
+            eprintln!("apw: warning: HOME is not set; runtime files will be written to the current directory");
+            PathBuf::from(".")
+        }
+    }
 }
 
-fn set_permissions(path: &Path, mode: u32) {
-    let _ = fs::set_permissions(path, fs::Permissions::from_mode(mode));
+fn set_permissions(path: &Path, mode: u32) -> Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|error| {
+        APWError::new(
+            Status::InvalidConfig,
+            format!("Failed to set permissions on {}: {error}", path.display()),
+        )
+    })
 }
 
 fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
@@ -176,7 +184,7 @@ fn ensure_runtime_dir() -> Result<()> {
             format!("Failed to create native app runtime directory: {error}"),
         )
     })?;
-    set_permissions(&path, NATIVE_APP_RUNTIME_DIR_MODE);
+    set_permissions(&path, NATIVE_APP_RUNTIME_DIR_MODE)?;
     Ok(())
 }
 
@@ -198,6 +206,7 @@ fn load_status_file() -> Option<Value> {
 
 fn default_credentials_payload() -> Value {
     json!({
+        "demo": true,
         "domains": ["example.com"],
         "credentials": [
             {
@@ -227,7 +236,12 @@ fn ensure_default_credentials_file() -> Result<()> {
             format!("Failed to write default bootstrap credentials: {error}"),
         )
     })?;
-    set_permissions(&path, NATIVE_APP_FILE_MODE);
+    set_permissions(&path, NATIVE_APP_FILE_MODE)?;
+    eprintln!(
+        "apw: info: created demo credentials file at {}. \
+         This file contains placeholder credentials — replace them with real entries before use.",
+        path.display()
+    );
     Ok(())
 }
 
@@ -327,12 +341,15 @@ fn send_request(command: &str, payload: Value) -> Result<Value> {
     stream.shutdown(std::net::Shutdown::Write).ok();
 
     let mut response = Vec::with_capacity(MAX_BROKER_BYTES);
-    stream.read_to_end(&mut response).map_err(|error| {
-        APWError::new(
-            Status::CommunicationTimeout,
-            format!("Failed to read response from the APW app service: {error}"),
-        )
-    })?;
+    stream
+        .take((MAX_BROKER_BYTES + 1) as u64)
+        .read_to_end(&mut response)
+        .map_err(|error| {
+            APWError::new(
+                Status::CommunicationTimeout,
+                format!("Failed to read response from the APW app service: {error}"),
+            )
+        })?;
     if response.len() > MAX_BROKER_BYTES {
         return Err(APWError::new(
             Status::ProtoInvalidResponse,
@@ -390,12 +407,9 @@ fn send_request_via_executable(command: &str, payload: Value) -> Result<Value> {
 }
 
 fn uuid_like_suffix() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let micros = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_micros();
-    format!("{micros:x}")
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    format!("{:016x}{:016x}", rng.gen::<u64>(), rng.gen::<u64>())
 }
 
 pub fn native_app_status() -> Value {
@@ -469,7 +483,7 @@ pub fn native_app_install() -> Result<Value> {
             format!("Failed to create native app install directory: {error}"),
         )
     })?;
-    set_permissions(&install_dir, NATIVE_APP_RUNTIME_DIR_MODE);
+    set_permissions(&install_dir, NATIVE_APP_RUNTIME_DIR_MODE)?;
 
     let installed_bundle = native_app_bundle_install_path();
     if installed_bundle.exists() {
@@ -481,7 +495,7 @@ pub fn native_app_install() -> Result<Value> {
         })?;
     }
     copy_dir_recursive(&source_bundle, &installed_bundle)?;
-    set_permissions(&installed_bundle, 0o755);
+    set_permissions(&installed_bundle, 0o755)?;
     ensure_default_credentials_file()?;
 
     Ok(json!({
@@ -550,6 +564,8 @@ pub fn native_app_launch() -> Result<Value> {
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
+    // SAFETY: `pre_exec` runs after `fork` and before `exec`. The closure only calls
+    // `libc::setsid()`, which is async-signal-safe and does not touch any Rust state.
     unsafe {
         command.pre_exec(|| {
             if libc::setsid() == -1 {

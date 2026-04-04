@@ -53,7 +53,9 @@ cat >"$PLIST_PATH" <<EOF
 EOF
 
 if command -v codesign >/dev/null 2>&1; then
-  codesign -s - --force --deep "$APP_DIR" >/dev/null 2>&1 || true
+  if ! codesign -s - --force --deep "$APP_DIR" 2>/dev/null; then
+    echo "Warning: ad-hoc code signing failed for $APP_DIR. The bundle may be rejected by Gatekeeper." >&2
+  fi
 fi
 
 echo "$APP_DIR"

@@ -263,7 +263,7 @@ fi
 printf '\n[1/8] Verifying version sync across release surfaces...\n'
 bash "$VERIFY_SCRIPT" "$CARGO_MANIFEST" \
   "$ROOT_DIR/rust/src/cli.rs" \
-  "$ROOT_DIR/rust/src/main.rs" \
+  "$ROOT_DIR/rust/src/types.rs" \
   "$ROOT_DIR/packaging/homebrew/apw.rb" \
   "$ROOT_DIR/README.md" \
   "$ROOT_DIR/docs/INSTALLATION.md" \

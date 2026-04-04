@@ -24,7 +24,7 @@ repo:
     - docs/bootstrap/**
 archetype:
   kind: generic-empty
-  packageManager: npm
+  packageManager: none
   moduleName: apw
 github:
   createRepo: false

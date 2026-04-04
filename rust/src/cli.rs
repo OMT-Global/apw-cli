@@ -5,7 +5,7 @@ use crate::host::{native_host_doctor, native_host_install, native_host_uninstall
 use crate::native_app::{
     native_app_doctor, native_app_install, native_app_launch, native_app_login,
 };
-use crate::types::{Payload, RenamedPasswordEntry, RuntimeMode, Status, TOTPEntry};
+use crate::types::{Payload, RuntimeMode, Status};
 use crate::utils::{bigint_to_base64, read_bigint};
 use clap::{Args, Parser, Subcommand};
 use rpassword::prompt_password;
@@ -59,10 +59,6 @@ fn parse_host(raw: &str) -> Result<String, APWError> {
 
 fn parse_host_arg(raw: &str) -> std::result::Result<String, String> {
     parse_host(raw).map_err(|error| error.message)
-}
-
-fn parse_port(raw: u16) -> Result<u16, APWError> {
-    Ok(raw)
 }
 
 fn sanitize_url(raw: &str) -> Result<String, APWError> {
@@ -210,7 +206,7 @@ fn ask_otp_action() -> Result<OtpAction, APWError> {
 
 #[derive(Parser)]
 #[command(name = "apw")]
-#[command(version = "2.0.0")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -525,7 +521,7 @@ fn run_otp(
 
 async fn run_start(args: StartCommand) -> Result<(), APWError> {
     let host = parse_host(&args.bind)?;
-    let port = parse_port(args.port)?;
+    let port = args.port;
     start_daemon(DaemonOptions {
         port,
         host,
@@ -546,14 +542,12 @@ fn parse_runtime_mode(raw: &str) -> std::result::Result<RuntimeMode, String> {
         "disabled" => RuntimeMode::Disabled,
         _ => {
             return Err(
-                "runtime mode must be one of auto|native|direct|launchd|disabled.".to_string(),
+                "runtime mode must be one of auto|native|browser|direct|launchd|disabled."
+                    .to_string(),
             );
         }
     })
 }
-
-#[allow(unused_imports)]
-fn _type_links(_renamed: RenamedPasswordEntry, _totp: TOTPEntry) {}
 
 #[cfg(test)]
 mod tests {

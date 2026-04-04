@@ -5,12 +5,16 @@ extract_version_from_cargo() {
   awk -F ' = ' '/^version = / {gsub(/"/, "", $2); print $2; exit}' "$1"
 }
 
-extract_version_from_cli() {
-  sed -nE 's/^[[:space:]]*#\[command\(version = "([0-9]+\.[0-9]+\.[0-9]+)"\)\].*/\1/p' "$1" | head -n 1
-}
+extract_version_from_rust_source() {
+  if grep -q 'env!("CARGO_PKG_VERSION")' "$1"; then
+    printf '%s\n' "$cargo_version"
+    return
+  fi
 
-extract_version_from_main() {
-  sed -nE 's/^const APP_VERSION: &str = "([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' "$1" | head -n 1
+  sed -nE \
+    -e 's/^[[:space:]]*#\[command\(version = "([0-9]+\.[0-9]+\.[0-9]+)"\)\].*/\1/p' \
+    -e 's/^[[:space:]]*(const|pub const) [A-Z_]+: &str = "([0-9]+\.[0-9]+\.[0-9]+)".*/\2/p' \
+    "$1" | head -n 1
 }
 
 extract_version_from_formula_version() {
@@ -26,20 +30,20 @@ extract_version_from_docs() {
 }
 
 cargo_version="$(extract_version_from_cargo "$1")"
-cli_version="$(extract_version_from_cli "$2")"
-main_version="$(extract_version_from_main "$3")"
+cli_version="$(extract_version_from_rust_source "$2")"
+types_version="$(extract_version_from_rust_source "$3")"
 formula_version="$(extract_version_from_formula_version "$4")"
 formula_url_version="$(extract_version_from_formula_url "$4")"
 docs_version1="$(extract_version_from_docs "$5")"
 docs_version2="$(extract_version_from_docs "$6")"
 docs_version3="$(extract_version_from_docs "$7")"
 
-if [ "$cargo_version" != "$cli_version" ] || [ "$cargo_version" != "$main_version" ] || [ "$cargo_version" != "$formula_version" ] || [ "$cargo_version" != "$formula_url_version" ] || [ "$cargo_version" != "$docs_version1" ] || [ "$cargo_version" != "$docs_version2" ] || [ "$cargo_version" != "$docs_version3" ]; then
+if [ "$cargo_version" != "$cli_version" ] || [ "$cargo_version" != "$types_version" ] || [ "$cargo_version" != "$formula_version" ] || [ "$cargo_version" != "$formula_url_version" ] || [ "$cargo_version" != "$docs_version1" ] || [ "$cargo_version" != "$docs_version2" ] || [ "$cargo_version" != "$docs_version3" ]; then
   cat <<EOF >&2
 Version sync check failed:
   Cargo.toml:    $cargo_version
   cli.rs:        $cli_version
-  main.rs:       $main_version
+  types.rs:      $types_version
   homebrew:      $formula_version
   homebrew_url:  $formula_url_version
   docs/README:   $docs_version1

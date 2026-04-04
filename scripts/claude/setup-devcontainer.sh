@@ -1,7 +1,7 @@
-    #!/usr/bin/env bash
-    set -euo pipefail
+#!/usr/bin/env bash
+set -euo pipefail
 
-    git config --global --add safe.directory "$(pwd)"
+git config --global safe.directory "$(pwd)"
 
 if [[ -f package-lock.json ]]; then
   npm ci --prefer-offline --no-audit --no-fund
