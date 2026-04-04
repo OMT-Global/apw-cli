@@ -33,6 +33,7 @@ cargo fmt --manifest-path rust/Cargo.toml -- --check
 cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path rust/Cargo.toml --all-targets
 cargo test --manifest-path rust/Cargo.toml --test legacy_parity
+cargo test --manifest-path rust/Cargo.toml --test native_app_e2e
 cargo build --manifest-path rust/Cargo.toml --release
 ./scripts/build-native-app.sh
 ```
@@ -47,6 +48,8 @@ The Rust test suite covers:
 - launch failure precedence over session errors
 - malformed or oversized payload rejection
 - native app diagnostics and bootstrap credential file initialization
+- end-to-end v2 app install, launch, status, doctor, and login flows
+- direct-exec fallback, unsupported-domain handling, denial handling, and malformed broker response mapping
 
 ## Archive policy
 
