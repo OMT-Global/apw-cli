@@ -7,12 +7,23 @@ let package = Package(
         .macOS(.v13),
     ],
     products: [
+        .library(name: "NativeAppLib", targets: ["NativeAppLib"]),
         .executable(name: "APW", targets: ["APW"]),
     ],
     targets: [
+        .target(
+            name: "NativeAppLib",
+            path: "Sources/NativeAppLib"
+        ),
         .executableTarget(
             name: "APW",
-            path: "Sources"
+            dependencies: ["NativeAppLib"],
+            path: "Sources/APW"
+        ),
+        .testTarget(
+            name: "NativeAppTests",
+            dependencies: ["NativeAppLib"],
+            path: "Tests/NativeAppTests"
         ),
     ]
 )

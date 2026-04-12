@@ -27,12 +27,14 @@ jobs:
     outputs:
       app: ${{ steps.filter.outputs.app }}
       ci: ${{ steps.filter.outputs.ci }}
+      native_app: ${{ steps.filter.outputs.native_app }}
     steps:
       - uses: dorny/paths-filter@v3
         id: filter
         with:
           filters: |
             app:
+              - 'native-app/**'
               - 'project.bootstrap.yaml'
               - 'AGENTS.md'
               - 'CLAUDE.md'
@@ -54,6 +56,9 @@ jobs:
               - 'docs/bootstrap/**'
               - '.env.example'
               - 'CODEOWNERS'
+            native_app:
+              - 'native-app/**'
+              - 'scripts/build-native-app.sh'
 
   fast-checks:
     name: Fast Checks
@@ -62,7 +67,11 @@ jobs:
     needs: changes
     if: >-
       github.event.pull_request.draft == false &&
-      (needs.changes.outputs.app == 'true' || needs.changes.outputs.ci == 'true')
+      (
+        needs.changes.outputs.app == 'true' ||
+        needs.changes.outputs.ci == 'true' ||
+        needs.changes.outputs.native_app == 'true'
+      )
     steps:
       - uses: actions/checkout@v4
         with:
@@ -70,6 +79,22 @@ jobs:
 
       - name: Run fast checks
         run: bash scripts/ci/run-fast-checks.sh
+
+  native-app-swift-tests:
+    name: Native App Swift Tests
+    runs-on: macos-14
+    timeout-minutes: 20
+    needs: changes
+    if: >-
+      github.event.pull_request.draft == false &&
+      needs.changes.outputs.native_app == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Run native app Swift tests
+        run: swift test --package-path native-app
 
   validate-secrets:
     name: Validate Secrets
@@ -90,6 +115,7 @@ jobs:
     needs:
       - changes
       - fast-checks
+      - native-app-swift-tests
       - validate-secrets
     steps:
       - name: Check required PR jobs
@@ -97,6 +123,7 @@ jobs:
           RESULTS: >-
             changes=${{ needs.changes.result }}
             fast-checks=${{ needs.fast-checks.result }}
+            native-app-swift-tests=${{ needs.native-app-swift-tests.result }}
             validate-secrets=${{ needs.validate-secrets.result }}
         run: |
           failed=0

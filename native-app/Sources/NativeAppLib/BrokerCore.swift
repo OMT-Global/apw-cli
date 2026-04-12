@@ -11,6 +11,25 @@ private let statusFileName = "status.json"
 private let credentialsFileName = "credentials.json"
 private let autoApproveEnv = "APW_NATIVE_APP_AUTO_APPROVE"
 
+protocol ApprovalPrompter {
+  func prompt(url: String, username: String) -> Bool
+}
+
+struct SystemApprovalPrompter: ApprovalPrompter {
+  func prompt(url: String, username: String) -> Bool {
+    _ = ASCredentialIdentityStore.shared
+    NSApplication.shared.setActivationPolicy(.accessory)
+    let alert = NSAlert()
+    alert.messageText = "Allow APW login?"
+    alert.informativeText = "Return the bootstrap credential for \(url) as \(username)?"
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: "Allow")
+    alert.addButton(withTitle: "Deny")
+    NSApp.activate(ignoringOtherApps: true)
+    return alert.runModal() == .alertFirstButtonReturn
+  }
+}
+
 enum BrokerError: Error, CustomStringConvertible {
   case message(String)
 
@@ -119,9 +138,11 @@ struct AnyCodable: Codable {
 final class BrokerServer {
   private let paths: AppPaths
   private let startedAt = ISO8601DateFormatter().string(from: Date())
+  private let approvalPrompter: ApprovalPrompter
 
-  init(paths: AppPaths) {
+  init(paths: AppPaths, approvalPrompter: ApprovalPrompter = SystemApprovalPrompter()) {
     self.paths = paths
+    self.approvalPrompter = approvalPrompter
   }
 
   func run() throws -> Never {
@@ -132,6 +153,233 @@ final class BrokerServer {
       "serviceStatus": "starting"
     ])
 
+    let descriptor = try bindListeningSocket()
+
+    try writeStatus(extra: [
+      "serviceStatus": "running",
+      "pid": getpid(),
+      "transport": "unix_socket",
+    ])
+
+    while true {
+      let client = accept(descriptor, nil, nil)
+      if client < 0 {
+        continue
+      }
+
+      autoreleasepool {
+        let handle = FileHandle(fileDescriptor: client, closeOnDealloc: true)
+        do {
+          let response = try handleRequest(from: handle)
+          let data = try JSONEncoder().encode(response)
+          try handle.write(contentsOf: data)
+        } catch {
+          let envelope = ResponseEnvelope(
+            ok: false,
+            code: 1,
+            payload: nil,
+            error: "Native app broker failure: \(error)",
+            requestId: nil
+          )
+          if let data = try? JSONEncoder().encode(envelope) {
+            try? handle.write(contentsOf: data)
+          }
+        }
+        try? handle.close()
+      }
+    }
+  }
+
+  private func handleRequest(from handle: FileHandle) throws -> ResponseEnvelope {
+    guard let data = try handle.readToEnd(), !data.isEmpty else {
+      throw BrokerError.message("Empty broker request.")
+    }
+    return try handleRequestData(data)
+  }
+
+  func handleRequestData(_ data: Data) throws -> ResponseEnvelope {
+    guard data.count <= maxBrokerBytes else {
+      throw BrokerError.message("Broker request payload too large.")
+    }
+
+    let request = try JSONDecoder().decode(RequestEnvelope.self, from: data)
+    return try dispatch(request: request)
+  }
+
+  func dispatch(request: RequestEnvelope) throws -> ResponseEnvelope {
+    switch request.command {
+    case "status":
+      return ResponseEnvelope(
+        ok: true,
+        code: 0,
+        payload: statusPayload().mapValues(AnyCodable.init),
+        error: nil,
+        requestId: request.requestId
+      )
+    case "doctor":
+      return ResponseEnvelope(
+        ok: true,
+        code: 0,
+        payload: doctorPayload().mapValues(AnyCodable.init),
+        error: nil,
+        requestId: request.requestId
+      )
+    case "login":
+      let url = request.payload?["url"] ?? ""
+      return try loginResponse(for: url, requestId: request.requestId)
+    default:
+      return ResponseEnvelope(
+        ok: false,
+        code: 1,
+        payload: nil,
+        error: "Unsupported native app command: \(request.command)",
+        requestId: request.requestId
+      )
+    }
+  }
+
+  private func statusPayload() -> [String: Any] {
+    [
+      "serviceStatus": "running",
+      "startedAt": startedAt,
+      "transport": "unix_socket",
+      "bundleVersion": bundleVersion(),
+      "socketPath": paths.socketPath.path,
+      "supportedDomains": supportedDomains(),
+      "authenticationServicesLinked": true,
+    ]
+  }
+
+  func doctorPayload() -> [String: Any] {
+    [
+      "app": [
+        "bundleVersion": bundleVersion(),
+        "bundlePath": Bundle.main.bundleURL.path,
+        "lsuiElement": true,
+      ],
+      "broker": statusPayload(),
+      "credentialsPath": paths.credentialsPath.path,
+      "guidance": [
+        "Run `apw login https://example.com` to exercise the bootstrap credential flow.",
+        "Set APW_NATIVE_APP_AUTO_APPROVE=1 to bypass the approval alert in non-interactive automation.",
+      ],
+    ]
+  }
+
+  private func loginResponse(for rawURL: String, requestId: String?) throws -> ResponseEnvelope {
+    guard let url = URL(string: rawURL), let host = url.host?.lowercased(), !host.isEmpty else {
+      return ResponseEnvelope(
+        ok: false,
+        code: 1,
+        payload: nil,
+        error: "Invalid URL for native app login.",
+        requestId: requestId
+      )
+    }
+
+    guard host == "example.com" else {
+      return ResponseEnvelope(
+        ok: false,
+        code: 3,
+        payload: nil,
+        error: "The APW v2 bootstrap app currently supports only https://example.com.",
+        requestId: requestId
+      )
+    }
+
+    let credentials = try loadCredentials()
+    guard let credential = credentials.credentials.first(where: { $0.domain == host }) else {
+      return ResponseEnvelope(
+        ok: false,
+        code: 3,
+        payload: nil,
+        error: "No bootstrap credential is configured for \(host).",
+        requestId: requestId
+      )
+    }
+
+    let approved: Bool
+    if ProcessInfo.processInfo.environment[autoApproveEnv] == "1" {
+      approved = true
+    } else {
+      approved = approvalPrompter.prompt(url: credential.url, username: credential.username)
+    }
+
+    if !approved {
+      return ResponseEnvelope(
+        ok: false,
+        code: 1,
+        payload: nil,
+        error: "User denied the APW login request.",
+        requestId: requestId
+      )
+    }
+
+    return ResponseEnvelope(
+      ok: true,
+      code: 0,
+      payload: [
+        "status": AnyCodable("approved"),
+        "url": AnyCodable(credential.url),
+        "domain": AnyCodable(credential.domain),
+        "username": AnyCodable(credential.username),
+        "password": AnyCodable(credential.password),
+        "transport": AnyCodable("unix_socket"),
+        "userMediated": AnyCodable(true),
+      ],
+      error: nil,
+      requestId: requestId
+    )
+  }
+
+  private func supportedDomains() -> [String] {
+    (try? loadCredentials().domains) ?? ["example.com"]
+  }
+
+  func loadCredentials() throws -> CredentialsFile {
+    let attributes = try FileManager.default.attributesOfItem(atPath: paths.credentialsPath.path)
+    let mode = (attributes[.posixPermissions] as? NSNumber)?.uint16Value
+    if mode != UInt16(statusFileMode) {
+      throw BrokerError.message("Credentials file must use permissions 0600.")
+    }
+    let data = try Data(contentsOf: paths.credentialsPath)
+    return try JSONDecoder().decode(CredentialsFile.self, from: data)
+  }
+
+  private func ensureRuntimeDirectory() throws {
+    try FileManager.default.createDirectory(
+      at: paths.runtimeRoot,
+      withIntermediateDirectories: true
+    )
+    chmod(paths.runtimeRoot.path, runtimeDirectoryMode)
+  }
+
+  private func ensureCredentialsFile() throws {
+    guard !FileManager.default.fileExists(atPath: paths.credentialsPath.path) else {
+      return
+    }
+    let content = CredentialsFile(
+      demo: true,
+      domains: ["example.com"],
+      credentials: [
+        .init(
+          domain: "example.com",
+          url: "https://example.com",
+          username: "demo@example.com",
+          password: "apw-demo-password"
+        )
+      ]
+    )
+    let data = try JSONEncoder().encode(content)
+    try data.write(to: paths.credentialsPath, options: [.atomic])
+    chmod(paths.credentialsPath.path, statusFileMode)
+    fputs(
+      "apw: info: created demo credentials file at \(paths.credentialsPath.path). "
+        + "This file contains placeholder credentials — replace them with real entries before use.\n",
+      stderr)
+  }
+
+  func bindListeningSocket() throws -> Int32 {
     let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
     guard descriptor >= 0 else {
       throw BrokerError.message("Failed to create UNIX socket.")
@@ -173,240 +421,10 @@ final class BrokerServer {
       throw BrokerError.message("Failed to listen on broker socket: \(error)")
     }
 
-    try writeStatus(extra: [
-      "serviceStatus": "running",
-      "pid": getpid(),
-      "transport": "unix_socket",
-    ])
-
-    while true {
-      let client = accept(descriptor, nil, nil)
-      if client < 0 {
-        continue
-      }
-
-      autoreleasepool {
-        let handle = FileHandle(fileDescriptor: client, closeOnDealloc: true)
-        do {
-          let response = try handleRequest(from: handle)
-          let data = try JSONEncoder().encode(response)
-          try handle.write(contentsOf: data)
-        } catch {
-          let envelope = ResponseEnvelope(
-            ok: false,
-            code: 1,
-            payload: nil,
-            error: "Native app broker failure: \(error)",
-            requestId: nil
-          )
-          if let data = try? JSONEncoder().encode(envelope) {
-            try? handle.write(contentsOf: data)
-          }
-        }
-        try? handle.close()
-      }
-    }
+    return descriptor
   }
 
-  private func handleRequest(from handle: FileHandle) throws -> ResponseEnvelope {
-    guard let data = try handle.readToEnd(), !data.isEmpty else {
-      throw BrokerError.message("Empty broker request.")
-    }
-    guard data.count <= maxBrokerBytes else {
-      throw BrokerError.message("Broker request payload too large.")
-    }
-
-    let request = try JSONDecoder().decode(RequestEnvelope.self, from: data)
-    return try dispatch(request: request)
-  }
-
-  func dispatch(request: RequestEnvelope) throws -> ResponseEnvelope {
-    switch request.command {
-    case "status":
-      return ResponseEnvelope(
-        ok: true,
-        code: 0,
-        payload: statusPayload().mapValues(AnyCodable.init),
-        error: nil,
-        requestId: request.requestId
-      )
-    case "doctor":
-      return ResponseEnvelope(
-        ok: true,
-        code: 0,
-        payload: doctorPayload().mapValues(AnyCodable.init),
-        error: nil,
-        requestId: request.requestId
-      )
-    case "login":
-      let url = request.payload?["url"] ?? ""
-      return try credentialResponse(for: url, intent: "login", requestId: request.requestId)
-    case "fill":
-      let url = request.payload?["url"] ?? ""
-      return try credentialResponse(for: url, intent: "fill", requestId: request.requestId)
-    default:
-      return ResponseEnvelope(
-        ok: false,
-        code: 1,
-        payload: nil,
-        error: "Unsupported native app command: \(request.command)",
-        requestId: request.requestId
-      )
-    }
-  }
-
-  private func statusPayload() -> [String: Any] {
-    [
-      "serviceStatus": "running",
-      "startedAt": startedAt,
-      "transport": "unix_socket",
-      "bundleVersion": bundleVersion(),
-      "socketPath": paths.socketPath.path,
-      "supportedDomains": supportedDomains(),
-      "authenticationServicesLinked": true,
-    ]
-  }
-
-  func doctorPayload() -> [String: Any] {
-    [
-      "app": [
-        "bundleVersion": bundleVersion(),
-        "bundlePath": Bundle.main.bundleURL.path,
-        "lsuiElement": true,
-      ],
-      "broker": statusPayload(),
-      "credentialsPath": paths.credentialsPath.path,
-      "guidance": [
-        "Run `apw login https://example.com` to exercise the bootstrap credential flow.",
-        "Run `apw fill https://example.com` to exercise the fill intent flow.",
-        "Set APW_NATIVE_APP_AUTO_APPROVE=1 to bypass the approval alert in non-interactive automation.",
-      ],
-    ]
-  }
-
-  private func credentialResponse(for rawURL: String, intent: String, requestId: String?) throws -> ResponseEnvelope {
-    guard let url = URL(string: rawURL), let host = url.host?.lowercased(), !host.isEmpty else {
-      return ResponseEnvelope(
-        ok: false,
-        code: 1,
-        payload: nil,
-        error: "Invalid URL for native app \(intent).",
-        requestId: requestId
-      )
-    }
-
-    guard host == "example.com" else {
-      return ResponseEnvelope(
-        ok: false,
-        code: 3,
-        payload: nil,
-        error: "The APW v2 bootstrap app currently supports only https://example.com.",
-        requestId: requestId
-      )
-    }
-
-    let credentials = try loadCredentials()
-    guard let credential = credentials.credentials.first(where: { $0.domain == host }) else {
-      return ResponseEnvelope(
-        ok: false,
-        code: 3,
-        payload: nil,
-        error: "No bootstrap credential is configured for \(host).",
-        requestId: requestId
-      )
-    }
-
-    let approved: Bool
-    if ProcessInfo.processInfo.environment[autoApproveEnv] == "1" {
-      approved = true
-    } else {
-      approved = promptForApproval(url: credential.url, username: credential.username)
-    }
-
-    if !approved {
-      return ResponseEnvelope(
-        ok: false,
-        code: 1,
-        payload: nil,
-        error: "User denied the APW login request.",
-        requestId: requestId
-      )
-    }
-
-    return ResponseEnvelope(
-      ok: true,
-      code: 0,
-      payload: [
-        "status": AnyCodable("approved"),
-        "intent": AnyCodable(intent),
-        "url": AnyCodable(credential.url),
-        "domain": AnyCodable(credential.domain),
-        "username": AnyCodable(credential.username),
-        "password": AnyCodable(credential.password),
-        "transport": AnyCodable("unix_socket"),
-        "userMediated": AnyCodable(true),
-      ],
-      error: nil,
-      requestId: requestId
-    )
-  }
-
-  private func promptForApproval(url: String, username: String) -> Bool {
-    _ = ASCredentialIdentityStore.shared
-    NSApplication.shared.setActivationPolicy(.accessory)
-    let alert = NSAlert()
-    alert.messageText = "Allow APW login?"
-    alert.informativeText = "Return the bootstrap credential for \(url) as \(username)?"
-    alert.alertStyle = .informational
-    alert.addButton(withTitle: "Allow")
-    alert.addButton(withTitle: "Deny")
-    NSApp.activate(ignoringOtherApps: true)
-    return alert.runModal() == .alertFirstButtonReturn
-  }
-
-  private func supportedDomains() -> [String] {
-    (try? loadCredentials().domains) ?? ["example.com"]
-  }
-
-  private func loadCredentials() throws -> CredentialsFile {
-    let data = try Data(contentsOf: paths.credentialsPath)
-    return try JSONDecoder().decode(CredentialsFile.self, from: data)
-  }
-
-  private func ensureRuntimeDirectory() throws {
-    try FileManager.default.createDirectory(
-      at: paths.runtimeRoot,
-      withIntermediateDirectories: true
-    )
-    chmod(paths.runtimeRoot.path, runtimeDirectoryMode)
-  }
-
-  private func ensureCredentialsFile() throws {
-    guard !FileManager.default.fileExists(atPath: paths.credentialsPath.path) else {
-      return
-    }
-    let content = CredentialsFile(
-      demo: true,
-      domains: ["example.com"],
-      credentials: [
-        .init(
-          domain: "example.com",
-          url: "https://example.com",
-          username: "demo@example.com",
-          password: "apw-demo-password"
-        )
-      ]
-    )
-    let data = try JSONEncoder().encode(content)
-    try data.write(to: paths.credentialsPath, options: [.atomic])
-    chmod(paths.credentialsPath.path, statusFileMode)
-    fputs(
-      "apw: info: created demo credentials file at \(paths.credentialsPath.path). "
-        + "This file contains placeholder credentials — replace them with real entries before use.\n",
-      stderr)
-  }
-
-  private func removeStaleSocket() throws {
+  func removeStaleSocket() throws {
     // Use unlink() directly rather than a check-then-remove pattern to avoid a TOCTOU
     // race where a symlink could be placed at the socket path between the existence
     // check and the removal. unlink() is atomic; ENOENT is not an error here.
@@ -439,7 +457,7 @@ func bundleVersion() -> String {
   return "dev"
 }
 
-func main() -> Never {
+public func runBrokerAppMain() -> Never {
   let paths = AppPaths.resolve()
   let command = CommandLine.arguments.dropFirst().first ?? "serve"
   let server = BrokerServer(paths: paths)
@@ -487,5 +505,3 @@ func main() -> Never {
     exit(1)
   }
 }
-
-main()
