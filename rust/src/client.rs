@@ -616,6 +616,8 @@ impl ApplePasswordManager {
             bridge_browser: None,
             bridge_connected_at: None,
             bridge_last_error: None,
+            fallback_provider: None,
+            fallback_provider_path: None,
             created_at: Utc::now().timestamp().to_string(),
         });
 
@@ -1060,6 +1062,8 @@ impl ApplePasswordManager {
             bridge_browser: None,
             bridge_connected_at: None,
             bridge_last_error: None,
+            fallback_provider: None,
+            fallback_provider_path: None,
             created_at: Utc::now().timestamp().to_string(),
         });
 
@@ -2666,6 +2670,8 @@ mod tests {
                 username: "alice".to_string(),
                 shared_key: String::new(),
                 secret_source: Some(SecretSource::File),
+                fallback_provider: None,
+                fallback_provider_path: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 runtime_mode: RuntimeMode::Auto,
                 last_launch_status: None,
@@ -2756,6 +2762,8 @@ mod tests {
                 username: "alice".to_string(),
                 shared_key: String::new(),
                 secret_source: Some(SecretSource::File),
+                fallback_provider: None,
+                fallback_provider_path: None,
                 created_at: (chrono::Utc::now() - chrono::Duration::days(45)).to_rfc3339(),
                 runtime_mode: RuntimeMode::Auto,
                 last_launch_status: None,

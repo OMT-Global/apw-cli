@@ -170,6 +170,15 @@ pub struct APWConfigV1 {
     pub bridge_last_error: Option<String>,
     #[serde(rename = "secretSource", default)]
     pub secret_source: Option<SecretSource>,
+    #[serde(rename = "fallbackProvider", alias = "fallback_provider", default)]
+    pub fallback_provider: Option<ExternalFallbackProvider>,
+    #[serde(
+        rename = "fallbackProviderPath",
+        alias = "fallback_provider_path",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub fallback_provider_path: Option<String>,
     #[serde(rename = "createdAt")]
     pub created_at: String,
 }
@@ -191,6 +200,8 @@ impl Default for APWConfigV1 {
             bridge_connected_at: None,
             bridge_last_error: None,
             secret_source: Some(SecretSource::File),
+            fallback_provider: None,
+            fallback_provider_path: None,
             created_at: Utc::now().to_rfc3339(),
         }
     }
@@ -248,6 +259,14 @@ pub struct APWRuntimeConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub bridge_last_error: Option<String>,
+    #[serde(rename = "fallbackProvider", default)]
+    pub fallback_provider: Option<ExternalFallbackProvider>,
+    #[serde(
+        rename = "fallbackProviderPath",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub fallback_provider_path: Option<String>,
     #[serde(rename = "createdAt")]
     pub created_at: String,
 }
@@ -268,7 +287,26 @@ impl Default for APWRuntimeConfig {
             bridge_browser: None,
             bridge_connected_at: None,
             bridge_last_error: None,
+            fallback_provider: None,
+            fallback_provider_path: None,
             created_at: Utc::now().to_rfc3339(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExternalFallbackProvider {
+    #[serde(rename = "1password")]
+    OnePassword,
+    #[serde(rename = "bitwarden")]
+    Bitwarden,
+}
+
+impl ExternalFallbackProvider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OnePassword => "1password",
+            Self::Bitwarden => "bitwarden",
         }
     }
 }

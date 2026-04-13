@@ -212,6 +212,8 @@ fn normalize_legacy_config(raw: APWConfig) -> APWConfigV1 {
         } else {
             None
         },
+        fallback_provider: None,
+        fallback_provider_path: None,
         last_launch_status: None,
         last_launch_error: None,
         last_launch_strategy: None,
@@ -244,6 +246,8 @@ pub fn read_config_file_or_empty() -> APWConfigV1 {
         bridge_connected_at: None,
         bridge_last_error: None,
         secret_source: Some(SecretSource::File),
+        fallback_provider: None,
+        fallback_provider_path: None,
         created_at: Utc.timestamp_nanos(0).to_rfc3339(),
     })
 }
@@ -270,6 +274,8 @@ pub fn read_config(opts: Option<ConfigReadOptions>) -> Result<APWRuntimeConfig> 
                 bridge_browser: None,
                 bridge_connected_at: None,
                 bridge_last_error: None,
+                fallback_provider: None,
+                fallback_provider_path: None,
                 created_at: Utc.timestamp_nanos(0).to_rfc3339(),
             });
         }
@@ -297,6 +303,8 @@ pub fn read_config(opts: Option<ConfigReadOptions>) -> Result<APWRuntimeConfig> 
             bridge_browser: None,
             bridge_connected_at: None,
             bridge_last_error: None,
+            fallback_provider: None,
+            fallback_provider_path: None,
             created_at: Utc.timestamp_nanos(0).to_rfc3339(),
         });
     }
@@ -323,6 +331,8 @@ pub fn read_config(opts: Option<ConfigReadOptions>) -> Result<APWRuntimeConfig> 
             bridge_browser: raw.bridge_browser,
             bridge_connected_at: raw.bridge_connected_at,
             bridge_last_error: raw.bridge_last_error,
+            fallback_provider: raw.fallback_provider,
+            fallback_provider_path: raw.fallback_provider_path,
             created_at: raw.created_at,
         });
     }
@@ -387,6 +397,8 @@ pub fn read_config(opts: Option<ConfigReadOptions>) -> Result<APWRuntimeConfig> 
         bridge_browser: raw.bridge_browser,
         bridge_connected_at: raw.bridge_connected_at,
         bridge_last_error: raw.bridge_last_error,
+        fallback_provider: raw.fallback_provider,
+        fallback_provider_path: raw.fallback_provider_path,
         created_at: raw.created_at,
     })
 }
@@ -607,6 +619,10 @@ pub fn write_config(input: WriteConfigInput) -> Result<APWConfigV1> {
         bridge_connected_at,
         bridge_last_error,
         created_at,
+        fallback_provider: existing.as_ref().and_then(|value| value.fallback_provider),
+        fallback_provider_path: existing
+            .as_ref()
+            .and_then(|value| value.fallback_provider_path.clone()),
     };
 
     let mut serialized = serde_json::to_string_pretty(&updated).map_err(|error| {
@@ -889,6 +905,8 @@ mod tests {
                 username: "alice".to_string(),
                 shared_key: bigint_to_base64(&1u32.into()),
                 secret_source: Some(SecretSource::File),
+                fallback_provider: None,
+                fallback_provider_path: None,
                 created_at: (chrono::Utc::now() - chrono::Duration::days(40)).to_rfc3339(),
                 runtime_mode: RuntimeMode::Auto,
                 last_launch_status: None,
@@ -944,6 +962,8 @@ mod tests {
                 username: "alice".to_string(),
                 shared_key: String::new(),
                 secret_source: Some(SecretSource::Keychain),
+                fallback_provider: None,
+                fallback_provider_path: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 runtime_mode: RuntimeMode::Auto,
                 last_launch_status: None,
@@ -1016,6 +1036,8 @@ mod tests {
                 username: "alice".to_string(),
                 shared_key: String::new(),
                 secret_source: Some(SecretSource::File),
+                fallback_provider: None,
+                fallback_provider_path: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 runtime_mode: RuntimeMode::Auto,
                 last_launch_status: None,

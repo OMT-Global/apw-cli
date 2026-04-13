@@ -1,5 +1,6 @@
 use crate::error::{APWError, Result};
-use crate::types::{Status, MAX_MESSAGE_BYTES, VERSION};
+use crate::types::{ExternalFallbackProvider, Status, MAX_MESSAGE_BYTES, VERSION};
+use crate::utils::read_config_file_or_empty;
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
@@ -594,7 +595,16 @@ pub fn native_app_launch() -> Result<Value> {
 }
 
 pub fn native_app_login(url: &str) -> Result<Value> {
-    native_app_request("login", url)
+    match native_app_request("login", url) {
+        Ok(payload) => Ok(payload),
+        Err(error) if matches!(error.code, Status::NoResults | Status::ProcessNotRunning) => {
+            if let Some(payload) = external_provider_login(url)? {
+                return Ok(payload);
+            }
+            Err(error)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub fn native_app_fill(url: &str) -> Result<Value> {
@@ -606,9 +616,354 @@ fn native_app_request(intent: &str, url: &str) -> Result<Value> {
     Ok(payload)
 }
 
+fn external_provider_login(url: &str) -> Result<Option<Value>> {
+    let config = read_config_file_or_empty();
+    let Some(provider) = config.fallback_provider else {
+        return Ok(None);
+    };
+    let Some(provider_path) = config.fallback_provider_path.as_deref() else {
+        return Err(APWError::new(
+            Status::InvalidConfig,
+            format!(
+                "Fallback provider `{}` requires an absolute `fallbackProviderPath`.",
+                provider.as_str()
+            ),
+        ));
+    };
+    let provider_path = PathBuf::from(provider_path);
+    if !provider_path.is_absolute() {
+        return Err(APWError::new(
+            Status::InvalidConfig,
+            format!(
+                "Fallback provider `{}` must use an absolute executable path.",
+                provider.as_str()
+            ),
+        ));
+    }
+
+    let host = url::Url::parse(url)
+        .map_err(|_| APWError::new(Status::InvalidParam, "Invalid URL for external fallback."))?
+        .host_str()
+        .map(str::to_string)
+        .ok_or_else(|| APWError::new(Status::InvalidParam, "Invalid URL for external fallback."))?;
+
+    let payload = match provider {
+        ExternalFallbackProvider::OnePassword => {
+            load_1password_credential(&provider_path, &host, url)?
+        }
+        ExternalFallbackProvider::Bitwarden => {
+            load_bitwarden_credential(&provider_path, &host, url)?
+        }
+    };
+    Ok(Some(payload))
+}
+
+fn load_1password_credential(path: &Path, host: &str, raw_url: &str) -> Result<Value> {
+    let list_output = Command::new(path)
+        .arg("item")
+        .arg("list")
+        .arg("--categories")
+        .arg("LOGIN")
+        .arg("--format")
+        .arg("json")
+        .output()
+        .map_err(|error| {
+            APWError::new(
+                Status::ProcessNotRunning,
+                format!(
+                    "Failed to execute 1Password CLI at {}: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+    if !list_output.status.success() {
+        return Err(APWError::new(
+            Status::NoResults,
+            format!(
+                "1Password CLI did not return a credential for {host}: {}",
+                String::from_utf8_lossy(&list_output.stderr).trim()
+            ),
+        ));
+    }
+
+    let items: Value = serde_json::from_slice(&list_output.stdout).map_err(|error| {
+        APWError::new(
+            Status::ProtoInvalidResponse,
+            format!("1Password CLI returned invalid JSON: {error}"),
+        )
+    })?;
+    let item_id = items
+        .as_array()
+        .and_then(|values| {
+            values
+                .iter()
+                .find(|item| one_password_item_matches_url(item, host, raw_url))
+                .or_else(|| {
+                    values
+                        .iter()
+                        .find(|item| one_password_item_matches_title(item, host, raw_url))
+                })
+        })
+        .and_then(|item| item.get("id"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            APWError::new(
+                Status::NoResults,
+                format!("1Password CLI returned no credential for {host}."),
+            )
+        })?;
+
+    let output = Command::new(path)
+        .arg("item")
+        .arg("get")
+        .arg(item_id)
+        .arg("--format")
+        .arg("json")
+        .output()
+        .map_err(|error| {
+            APWError::new(
+                Status::ProcessNotRunning,
+                format!(
+                    "Failed to execute 1Password CLI at {}: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+    if !output.status.success() {
+        return Err(APWError::new(
+            Status::NoResults,
+            format!(
+                "1Password CLI did not return a credential for {host}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
+
+    let item: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
+        APWError::new(
+            Status::ProtoInvalidResponse,
+            format!("1Password CLI returned invalid JSON: {error}"),
+        )
+    })?;
+    let fields = item
+        .get("fields")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            APWError::new(
+                Status::ProtoInvalidResponse,
+                "1Password item is missing fields.",
+            )
+        })?;
+    let username = fields
+        .iter()
+        .find(|field| {
+            field.get("id").and_then(Value::as_str) == Some("username")
+                || field.get("label").and_then(Value::as_str) == Some("username")
+                || field.get("purpose").and_then(Value::as_str) == Some("USERNAME")
+        })
+        .and_then(|field| field.get("value"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            APWError::new(
+                Status::ProtoInvalidResponse,
+                "1Password item is missing a username.",
+            )
+        })?;
+    let password = fields
+        .iter()
+        .find(|field| {
+            field.get("id").and_then(Value::as_str) == Some("password")
+                || field.get("label").and_then(Value::as_str) == Some("password")
+                || field.get("purpose").and_then(Value::as_str) == Some("PASSWORD")
+        })
+        .and_then(|field| field.get("value"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            APWError::new(
+                Status::ProtoInvalidResponse,
+                "1Password item is missing a password.",
+            )
+        })?;
+    let resolved_url = item
+        .get("urls")
+        .and_then(Value::as_array)
+        .and_then(|urls| urls.first())
+        .and_then(|entry| entry.get("href"))
+        .and_then(Value::as_str)
+        .unwrap_or(raw_url);
+
+    Ok(external_cli_payload(
+        ExternalFallbackProvider::OnePassword,
+        host,
+        resolved_url,
+        username,
+        password,
+    ))
+}
+
+fn load_bitwarden_credential(path: &Path, host: &str, raw_url: &str) -> Result<Value> {
+    let output = Command::new(path)
+        .arg("list")
+        .arg("items")
+        .arg("--search")
+        .arg(host)
+        .output()
+        .map_err(|error| {
+            APWError::new(
+                Status::ProcessNotRunning,
+                format!(
+                    "Failed to execute Bitwarden CLI at {}: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+    if !output.status.success() {
+        return Err(APWError::new(
+            Status::NoResults,
+            format!(
+                "Bitwarden CLI did not return a credential for {host}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
+
+    let items: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
+        APWError::new(
+            Status::ProtoInvalidResponse,
+            format!("Bitwarden CLI returned invalid JSON: {error}"),
+        )
+    })?;
+    let item = items
+        .as_array()
+        .and_then(|values| {
+            values
+                .iter()
+                .find(|item| bitwarden_item_matches_target(item, host, raw_url))
+        })
+        .ok_or_else(|| {
+            APWError::new(
+                Status::NoResults,
+                format!("Bitwarden CLI returned no credential for {host}."),
+            )
+        })?;
+    let login = item
+        .get("login")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            APWError::new(
+                Status::ProtoInvalidResponse,
+                "Bitwarden item is missing login data.",
+            )
+        })?;
+    let username = login
+        .get("username")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            APWError::new(
+                Status::ProtoInvalidResponse,
+                "Bitwarden item is missing a username.",
+            )
+        })?;
+    let password = login
+        .get("password")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            APWError::new(
+                Status::ProtoInvalidResponse,
+                "Bitwarden item is missing a password.",
+            )
+        })?;
+    let resolved_url = login
+        .get("uris")
+        .and_then(Value::as_array)
+        .and_then(|uris| uris.first())
+        .and_then(|entry| entry.get("uri"))
+        .and_then(Value::as_str)
+        .unwrap_or(raw_url);
+
+    Ok(external_cli_payload(
+        ExternalFallbackProvider::Bitwarden,
+        host,
+        resolved_url,
+        username,
+        password,
+    ))
+}
+
+fn one_password_item_matches_url(item: &Value, host: &str, raw_url: &str) -> bool {
+    item.get("urls")
+        .and_then(Value::as_array)
+        .map(|urls| {
+            urls.iter()
+                .filter_map(|entry| entry.get("href"))
+                .filter_map(Value::as_str)
+                .any(|uri| uri_matches_target(uri, host, raw_url))
+        })
+        .unwrap_or(false)
+}
+
+fn one_password_item_matches_title(item: &Value, host: &str, raw_url: &str) -> bool {
+    item.get("title")
+        .and_then(Value::as_str)
+        .map(|title| title.eq_ignore_ascii_case(host) || title.eq_ignore_ascii_case(raw_url))
+        .unwrap_or(false)
+}
+
+fn bitwarden_item_matches_target(item: &Value, host: &str, raw_url: &str) -> bool {
+    item.get("login")
+        .and_then(Value::as_object)
+        .and_then(|login| login.get("uris"))
+        .and_then(Value::as_array)
+        .map(|uris| {
+            uris.iter()
+                .filter_map(|entry| entry.get("uri"))
+                .filter_map(Value::as_str)
+                .any(|uri| uri_matches_target(uri, host, raw_url))
+        })
+        .unwrap_or(false)
+}
+
+fn uri_matches_target(uri: &str, host: &str, raw_url: &str) -> bool {
+    uri.eq_ignore_ascii_case(raw_url)
+        || host_from_uri_like(uri)
+            .map(|candidate| candidate.eq_ignore_ascii_case(host))
+            .unwrap_or(false)
+}
+
+fn host_from_uri_like(uri: &str) -> Option<String> {
+    url::Url::parse(uri)
+        .ok()
+        .and_then(|value| value.host_str().map(str::to_string))
+        .or_else(|| {
+            url::Url::parse(&format!("https://{uri}"))
+                .ok()
+                .and_then(|value| value.host_str().map(str::to_string))
+        })
+}
+
+fn external_cli_payload(
+    provider: ExternalFallbackProvider,
+    host: &str,
+    url: &str,
+    username: &str,
+    password: &str,
+) -> Value {
+    json!({
+        "status": "approved",
+        "url": url,
+        "domain": host,
+        "username": username,
+        "password": password,
+        "transport": "external_cli",
+        "userMediated": false,
+        "source": provider.as_str(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::APWConfigV1;
     use serial_test::serial;
     use tempfile::TempDir;
 
@@ -677,6 +1032,158 @@ print(json.dumps({"ok": True, "code": 0, "payload": payload}))
             let payload = native_app_fill("https://example.com").unwrap();
             assert_eq!(payload["intent"], "fill");
             assert_eq!(payload["url"], "https://example.com");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn login_can_fallback_to_1password_cli() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("op");
+            fs::write(
+                &provider_path,
+                r#"#!/usr/bin/env python3
+import json
+import sys
+
+if sys.argv[1:] == ["item", "list", "--categories", "LOGIN", "--format", "json"]:
+    print(json.dumps([
+      {
+        "id": "item-wrong",
+        "title": "vault.example.com",
+        "urls": [{"href": "https://elsewhere.example.com"}]
+      },
+      {
+        "id": "item-correct",
+        "title": "Work Vault",
+        "urls": [{"href": "https://vault.example.com"}]
+      }
+    ]))
+elif sys.argv[1:] == ["item", "get", "item-correct", "--format", "json"]:
+    print(json.dumps({
+      "fields": [
+        {"id": "username", "value": "alice@example.com"},
+        {"id": "password", "value": "secret-1password"}
+      ],
+      "urls": [{"href": "https://vault.example.com"}]
+    }))
+else:
+    raise SystemExit(1)
+"#,
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::OnePassword),
+                fallback_provider_path: Some(provider_path.display().to_string()),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            let payload = native_app_login("https://vault.example.com").unwrap();
+            assert_eq!(payload["source"], "1password");
+            assert_eq!(payload["transport"], "external_cli");
+            assert_eq!(payload["username"], "alice@example.com");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn login_bitwarden_fallback_matches_uri_before_selecting_item() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("bw");
+            fs::write(
+                &provider_path,
+                r#"#!/usr/bin/env python3
+import json
+import sys
+
+if sys.argv[1:] == ["list", "items", "--search", "vault.example.com"]:
+    print(json.dumps([
+      {
+        "name": "vault.example.com note only",
+        "login": {
+          "username": "wrong@example.com",
+          "password": "wrong-secret",
+          "uris": [{"uri": "https://elsewhere.example.com"}]
+        }
+      },
+      {
+        "name": "Work Vault",
+        "login": {
+          "username": "alice@example.com",
+          "password": "secret-bitwarden",
+          "uris": [{"uri": "https://vault.example.com/login"}]
+        }
+      }
+    ]))
+else:
+    raise SystemExit(1)
+"#,
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::Bitwarden),
+                fallback_provider_path: Some(provider_path.display().to_string()),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            let payload = native_app_login("https://vault.example.com").unwrap();
+            assert_eq!(payload["source"], "bitwarden");
+            assert_eq!(payload["transport"], "external_cli");
+            assert_eq!(payload["username"], "alice@example.com");
+            assert_eq!(payload["url"], "https://vault.example.com/login");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn login_rejects_relative_external_provider_paths() {
+        with_temp_home(|| {
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::Bitwarden),
+                fallback_provider_path: Some("bw".to_string()),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            let error = native_app_login("https://vault.example.com").unwrap_err();
+            assert_eq!(error.code, Status::InvalidConfig);
+            assert!(error.message.contains("absolute executable path"));
         });
     }
 }

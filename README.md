@@ -90,6 +90,19 @@ The current bootstrap domain is `https://example.com`. The APW app uses a
 same-user local broker socket and explicit approval UI for the returned
 credential flow.
 
+Optional reduced-security mode for external password managers can be configured
+in `~/.apw/config.json` with an absolute provider path:
+
+```json
+{
+  "fallbackProvider": "1password",
+  "fallbackProviderPath": "/usr/local/bin/op"
+}
+```
+
+Supported fallback providers are `1password` and `bitwarden`. APW does not
+cache external-provider credentials.
+
 ## Common commands
 
 ```bash

@@ -16,6 +16,9 @@ Release reference version: `v2.0.0`
 - config, status, and bootstrap credential files are written with mode `0600`
 - legacy session secret material is kept in the user keychain when the `v1.x`
   compatibility path is used
+- external CLI fallback is opt-in via `fallbackProvider` +
+  `fallbackProviderPath`, requires an absolute executable path, and does not
+  cache returned credentials
 
 ### Runtime broker hardening
 
