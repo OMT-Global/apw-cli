@@ -14,6 +14,22 @@ use std::fmt;
 pub const DEFAULT_HOST: &str = "127.0.0.1";
 pub const DEFAULT_PORT: u16 = 10_000;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const BUILD_DATE: &str = match option_env!("APW_BUILD_DATE") {
+    Some(value) => value,
+    None => "unknown",
+};
+pub const GIT_SHA: &str = match option_env!("APW_GIT_SHA") {
+    Some(value) => value,
+    None => "unknown",
+};
+pub const RUST_VERSION: &str = match option_env!("APW_RUST_VERSION") {
+    Some(value) => value,
+    None => "unknown",
+};
+pub const BUILD_TARGET: &str = match option_env!("APW_BUILD_TARGET") {
+    Some(value) => value,
+    None => "unknown",
+};
 /// Maximum payload size shared by the daemon frame reader and the native-app broker.
 /// Both sides must agree on this limit; changing it requires updating both channels.
 pub const MAX_MESSAGE_BYTES: usize = 32 * 1024;

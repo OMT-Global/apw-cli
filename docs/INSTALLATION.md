@@ -61,6 +61,7 @@ This validates:
 - formula install path
 - native app bundle packaging
 - `apw --version`
+- `apw version --json`
 - `apw status --json`
 
 ### Publish your own tap

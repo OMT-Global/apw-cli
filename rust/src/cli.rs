@@ -5,7 +5,9 @@ use crate::host::{native_host_doctor, native_host_install, native_host_uninstall
 use crate::native_app::{
     native_app_doctor, native_app_fill, native_app_install, native_app_launch, native_app_login,
 };
-use crate::types::{Payload, RuntimeMode, Status};
+use crate::types::{
+    Payload, RuntimeMode, Status, BUILD_DATE, BUILD_TARGET, GIT_SHA, RUST_VERSION, VERSION,
+};
 use crate::utils::{bigint_to_base64, read_bigint};
 use clap::{Args, Parser, Subcommand};
 use rpassword::prompt_password;
@@ -226,6 +228,7 @@ pub enum Commands {
     Otp(OtpCommand),
     Start(StartCommand),
     Status(StatusCommand),
+    Version(VersionCommand),
 }
 
 #[derive(Args)]
@@ -354,6 +357,9 @@ pub struct StatusCommand {
     pub json: bool,
 }
 
+#[derive(Args, Default)]
+pub struct VersionCommand {}
+
 pub async fn run(mut manager: ApplePasswordManager, cli: Cli) -> Result<(), APWError> {
     match cli.command {
         Commands::App(args) => run_app(args, cli.json),
@@ -366,6 +372,7 @@ pub async fn run(mut manager: ApplePasswordManager, cli: Cli) -> Result<(), APWE
         Commands::Otp(args) => run_otp(&mut manager, args, cli.json),
         Commands::Start(args) => run_start(args).await,
         Commands::Status(args) => run_status(&mut manager, args, cli.json),
+        Commands::Version(args) => run_version(args, cli.json),
     }
 }
 
@@ -384,14 +391,14 @@ fn run_doctor(_args: DoctorCommand, cli_json: bool) -> Result<(), APWError> {
     Ok(())
 }
 
-fn run_login(args: LoginCommand, cli_json: bool) -> Result<(), APWError> {
-    let payload = native_app_login(&sanitize_url(&args.url)?)?;
+fn run_fill(args: FillCommand, cli_json: bool) -> Result<(), APWError> {
+    let payload = native_app_fill(&sanitize_url(&args.url)?)?;
     print_output(&payload, Status::Success, cli_json);
     Ok(())
 }
 
-fn run_fill(args: FillCommand, cli_json: bool) -> Result<(), APWError> {
-    let payload = native_app_fill(&sanitize_url(&args.url)?)?;
+fn run_login(args: LoginCommand, cli_json: bool) -> Result<(), APWError> {
+    let payload = native_app_login(&sanitize_url(&args.url)?)?;
     print_output(&payload, Status::Success, cli_json);
     Ok(())
 }
@@ -403,6 +410,20 @@ fn run_status(
 ) -> Result<(), APWError> {
     let payload = manager.status();
     print_status(payload, args.json || cli_json);
+    Ok(())
+}
+
+fn run_version(_args: VersionCommand, cli_json: bool) -> Result<(), APWError> {
+    if cli_json {
+        print_output(&version_payload()?, Status::Success, true);
+        return Ok(());
+    }
+
+    print_output(
+        &serde_json::Value::String(format!("apw {}", VERSION)),
+        Status::Success,
+        false,
+    );
     Ok(())
 }
 
@@ -544,6 +565,94 @@ async fn run_start(args: StartCommand) -> Result<(), APWError> {
     .await
 }
 
+fn version_payload() -> Result<serde_json::Value, APWError> {
+    Ok(json!({
+      "version": VERSION,
+      "semver": parse_semver(VERSION)?,
+      "build_date": BUILD_DATE,
+      "git_sha": GIT_SHA,
+      "rust_version": RUST_VERSION,
+      "target": BUILD_TARGET,
+    }))
+}
+
+fn parse_semver(version: &str) -> Result<serde_json::Value, APWError> {
+    let invalid = || APWError::new(Status::GenericError, "Invalid semantic version.");
+    let (core_and_prerelease, build) = match version.split_once('+') {
+        Some((core_and_prerelease, build)) if !build.is_empty() && !build.contains('+') => {
+            (core_and_prerelease, Some(build))
+        }
+        Some(_) => return Err(invalid()),
+        None => (version, None),
+    };
+    let (core, prerelease) = match core_and_prerelease.split_once('-') {
+        Some((core, prerelease)) if !prerelease.is_empty() => (core, Some(prerelease)),
+        Some(_) => return Err(invalid()),
+        None => (core_and_prerelease, None),
+    };
+
+    let mut parts = core.split('.');
+    let major = parse_semver_number(parts.next())?;
+    let minor = parse_semver_number(parts.next())?;
+    let patch = parse_semver_number(parts.next())?;
+
+    if parts.next().is_some() {
+        return Err(invalid());
+    }
+
+    if let Some(prerelease) = prerelease {
+        validate_semver_identifiers(prerelease, true)?;
+    }
+
+    if let Some(build) = build {
+        validate_semver_identifiers(build, false)?;
+    }
+
+    Ok(json!({
+      "major": major,
+      "minor": minor,
+      "patch": patch,
+    }))
+}
+
+fn parse_semver_number(part: Option<&str>) -> Result<u64, APWError> {
+    let invalid = || APWError::new(Status::GenericError, "Invalid semantic version.");
+    let part = part.ok_or_else(invalid)?;
+    if part.is_empty()
+        || !part.chars().all(|value| value.is_ascii_digit())
+        || (part.len() > 1 && part.starts_with('0'))
+    {
+        return Err(invalid());
+    }
+
+    part.parse::<u64>().map_err(|_| invalid())
+}
+
+fn validate_semver_identifiers(
+    value: &str,
+    reject_numeric_leading_zero: bool,
+) -> Result<(), APWError> {
+    let invalid = || APWError::new(Status::GenericError, "Invalid semantic version.");
+    for part in value.split('.') {
+        if part.is_empty()
+            || !part
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+        {
+            return Err(invalid());
+        }
+        if reject_numeric_leading_zero
+            && part.len() > 1
+            && part.chars().all(|ch| ch.is_ascii_digit())
+            && part.starts_with('0')
+        {
+            return Err(invalid());
+        }
+    }
+
+    Ok(())
+}
+
 fn parse_runtime_mode(raw: &str) -> std::result::Result<RuntimeMode, String> {
     let normalized = raw.trim().to_lowercase();
     Ok(match normalized.as_str() {
@@ -608,6 +717,51 @@ mod tests {
     fn fill_subcommand_is_parsed() {
         let cli = Cli::parse_from(["apw", "fill", "example.com"]);
         assert!(matches!(cli.command, Commands::Fill(_)));
+    }
+
+    #[test]
+    fn version_subcommand_is_parsed() {
+        let cli = Cli::parse_from(["apw", "version"]);
+        assert!(matches!(cli.command, Commands::Version(_)));
+    }
+
+    #[test]
+    fn version_payload_includes_expected_metadata() {
+        let payload = version_payload().unwrap();
+        assert_eq!(payload["version"], VERSION);
+        assert_eq!(payload["semver"], parse_semver(VERSION).unwrap());
+        assert_eq!(payload["build_date"], BUILD_DATE);
+        assert_eq!(payload["git_sha"], GIT_SHA);
+        assert_eq!(payload["rust_version"], RUST_VERSION);
+        assert_eq!(payload["target"], BUILD_TARGET);
+    }
+
+    #[test]
+    fn parse_semver_accepts_prerelease_and_build_metadata() {
+        let prerelease = parse_semver("2.1.0-rc.1").unwrap();
+        assert_eq!(prerelease["major"], 2);
+        assert_eq!(prerelease["minor"], 1);
+        assert_eq!(prerelease["patch"], 0);
+
+        let build = parse_semver("2.1.0+build.7").unwrap();
+        assert_eq!(build["major"], 2);
+        assert_eq!(build["minor"], 1);
+        assert_eq!(build["patch"], 0);
+
+        let combined = parse_semver("2.1.0-rc.1+build.7").unwrap();
+        assert_eq!(combined["major"], 2);
+        assert_eq!(combined["minor"], 1);
+        assert_eq!(combined["patch"], 0);
+    }
+
+    #[test]
+    fn parse_semver_rejects_invalid_shapes() {
+        assert!(parse_semver("1.2").is_err());
+        assert!(parse_semver("1.2.3.4").is_err());
+        assert!(parse_semver("one.two.three").is_err());
+        assert!(parse_semver("1.2.3-01").is_err());
+        assert!(parse_semver("1.2.3-").is_err());
+        assert!(parse_semver("1.2.3+").is_err());
     }
 
     #[test]

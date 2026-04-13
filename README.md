@@ -26,8 +26,9 @@ Archive policy: [docs/ARCHIVE_POLICY.md](/Users/johnteneyckjr./src/apw/docs/ARCH
 - Installs the APW macOS app bundle with `apw app install`
 - Launches the local APW broker with `apw app launch`
 - Reports app, broker, and legacy runtime health with `apw status` and `apw status --json`
-- Reports bootstrap diagnostics with `apw doctor`
 - Returns a fill-intent credential envelope with `apw fill <url>`
+- Reports machine-readable build metadata with `apw version --json`
+- Reports bootstrap diagnostics with `apw doctor`
 - Returns an app-mediated credential for a supported domain with `apw login <url>`
 
 ## Support model
@@ -101,6 +102,9 @@ apw status --json
 apw fill https://example.com
 apw login https://example.com
 ```
+
+Machine-readable build metadata is available via `apw version` and
+`apw version --json`.
 
 Legacy migration commands remain available in the repo:
 
