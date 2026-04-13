@@ -5,6 +5,7 @@ mod client;
 mod daemon;
 mod error;
 mod host;
+mod logging;
 mod native_app;
 mod secrets;
 mod srp;
@@ -13,6 +14,7 @@ mod utils;
 
 use cli::{run, Cli};
 use client::ApplePasswordManager;
+use logging::error as log_error;
 use std::env;
 use std::process;
 
@@ -21,9 +23,13 @@ async fn main() {
     let raw_args: Vec<String> = env::args().collect();
     let normalized_args = normalize_legacy_args(raw_args);
     let args = Cli::parse_from(normalized_args);
-    let manager = ApplePasswordManager::new();
     let json_output = args.json;
+    logging::init(args.log_level, json_output);
+    let manager = ApplePasswordManager::new();
     if let Err(error) = run(manager, args).await {
+        if should_emit_text_error_log(json_output) {
+            log_error("cli", &error.message);
+        }
         if json_output {
             eprintln!(
                 "{}",
@@ -40,6 +46,10 @@ async fn main() {
     }
 }
 
+fn should_emit_text_error_log(json_output: bool) -> bool {
+    !json_output
+}
+
 fn normalize_legacy_args(raw: Vec<String>) -> Vec<String> {
     raw.into_iter()
         .map(|arg| match arg.as_str() {
@@ -52,7 +62,7 @@ fn normalize_legacy_args(raw: Vec<String>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_legacy_args;
+    use super::{normalize_legacy_args, should_emit_text_error_log};
 
     #[test]
     fn normalizes_legacy_auth_short_flags() {
@@ -73,5 +83,11 @@ mod tests {
                 "client".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn suppresses_text_error_logs_for_json_output() {
+        assert!(!should_emit_text_error_log(true));
+        assert!(should_emit_text_error_log(false));
     }
 }

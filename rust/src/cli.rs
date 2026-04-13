@@ -2,6 +2,7 @@ use crate::client::ApplePasswordManager;
 use crate::daemon::{start_daemon, DaemonOptions};
 use crate::error::APWError;
 use crate::host::{native_host_doctor, native_host_install, native_host_uninstall};
+use crate::logging::{self, LogLevel};
 use crate::native_app::{
     native_app_doctor, native_app_fill, native_app_install, native_app_launch, native_app_login,
 };
@@ -214,6 +215,13 @@ pub struct Cli {
     pub command: Commands,
     #[arg(long = "json", global = true)]
     pub json: bool,
+    #[arg(
+        long = "log-level",
+        global = true,
+        env = "APW_LOG",
+        default_value = "warn"
+    )]
+    pub log_level: LogLevel,
 }
 
 #[derive(Subcommand)]
@@ -378,26 +386,38 @@ pub async fn run(mut manager: ApplePasswordManager, cli: Cli) -> Result<(), APWE
 
 fn run_app(args: AppCommand, cli_json: bool) -> Result<(), APWError> {
     let payload = match args.command {
-        AppSubcommand::Install => native_app_install()?,
-        AppSubcommand::Launch => native_app_launch()?,
+        AppSubcommand::Install => {
+            logging::info("app", "installing native app bundle");
+            native_app_install()?
+        }
+        AppSubcommand::Launch => {
+            logging::info("app", "launching native app broker");
+            native_app_launch()?
+        }
     };
     print_output(&payload, Status::Success, cli_json);
     Ok(())
 }
 
 fn run_doctor(_args: DoctorCommand, cli_json: bool) -> Result<(), APWError> {
+    logging::info("doctor", "collecting native app diagnostics");
     let payload = native_app_doctor()?;
     print_output(&payload, Status::Success, cli_json);
     Ok(())
 }
 
 fn run_fill(args: FillCommand, cli_json: bool) -> Result<(), APWError> {
+    logging::info(
+        "fill",
+        format!("requesting fill credential for {}", args.url),
+    );
     let payload = native_app_fill(&sanitize_url(&args.url)?)?;
     print_output(&payload, Status::Success, cli_json);
     Ok(())
 }
 
 fn run_login(args: LoginCommand, cli_json: bool) -> Result<(), APWError> {
+    logging::info("login", format!("requesting credential for {}", args.url));
     let payload = native_app_login(&sanitize_url(&args.url)?)?;
     print_output(&payload, Status::Success, cli_json);
     Ok(())
@@ -408,6 +428,7 @@ fn run_status(
     args: StatusCommand,
     cli_json: bool,
 ) -> Result<(), APWError> {
+    logging::debug("status", "collecting runtime status");
     let payload = manager.status();
     print_status(payload, args.json || cli_json);
     Ok(())
@@ -554,6 +575,10 @@ fn run_otp(
 }
 
 async fn run_start(args: StartCommand) -> Result<(), APWError> {
+    logging::info(
+        "daemon",
+        format!("starting daemon on {}:{}", args.bind, args.port),
+    );
     let host = parse_host(&args.bind)?;
     let port = args.port;
     start_daemon(DaemonOptions {
@@ -762,6 +787,14 @@ mod tests {
         assert!(parse_semver("1.2.3-01").is_err());
         assert!(parse_semver("1.2.3-").is_err());
         assert!(parse_semver("1.2.3+").is_err());
+    }
+
+    #[test]
+    fn log_level_can_be_loaded_from_env() {
+        std::env::set_var("APW_LOG", "debug");
+        let cli = Cli::parse_from(["apw", "status"]);
+        std::env::remove_var("APW_LOG");
+        assert_eq!(cli.log_level, LogLevel::Debug);
     }
 
     #[test]
