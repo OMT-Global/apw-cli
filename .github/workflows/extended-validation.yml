@@ -89,7 +89,7 @@ jobs:
 
   extended-checks:
     name: Extended Checks
-    runs-on: macos-14
+    runs-on: ['self-hosted', 'public', 'macOS', 'ARM64', 'xcode']
     timeout-minutes: 40
     needs: changes
     if: needs.changes.outputs.extended == 'true' || needs.changes.outputs.app == 'true'

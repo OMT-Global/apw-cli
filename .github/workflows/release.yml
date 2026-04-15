@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-14
+    runs-on: ['self-hosted', 'public', 'macOS', 'ARM64', 'xcode']
     steps:
       - name: Checkout
         uses: actions/checkout@v5
