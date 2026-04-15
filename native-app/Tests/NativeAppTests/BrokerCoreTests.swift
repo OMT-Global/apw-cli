@@ -154,4 +154,16 @@ final class BrokerCoreTests: XCTestCase {
     XCTAssertEqual(denyResponse.ok, false)
     XCTAssertEqual(denyResponse.error, "User denied the APW login request.")
   }
+
+  func testDoctorPayloadDoesNotAdvertiseAmbientAutoApproveEscapeHatch() throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let server = makeServer(root: root)
+
+    let payload = server.doctorPayload()
+    let guidance = payload["guidance"] as? [String]
+
+    XCTAssertNotNil(guidance)
+    XCTAssertFalse(guidance?.contains(where: { $0.contains("APW_NATIVE_APP_AUTO_APPROVE") }) ?? true)
+  }
 }

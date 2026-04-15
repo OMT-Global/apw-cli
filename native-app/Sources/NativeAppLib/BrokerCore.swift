@@ -9,8 +9,6 @@ private let maxBrokerBytes = 32 * 1024
 private let appSocketName = "broker.sock"
 private let statusFileName = "status.json"
 private let credentialsFileName = "credentials.json"
-private let autoApproveEnv = "APW_NATIVE_APP_AUTO_APPROVE"
-
 protocol ApprovalPrompter {
   func prompt(url: String, username: String) -> Bool
 }
@@ -261,7 +259,6 @@ final class BrokerServer {
       "credentialsPath": paths.credentialsPath.path,
       "guidance": [
         "Run `apw login https://example.com` to exercise the bootstrap credential flow.",
-        "Set APW_NATIVE_APP_AUTO_APPROVE=1 to bypass the approval alert in non-interactive automation.",
       ],
     ]
   }
@@ -298,12 +295,7 @@ final class BrokerServer {
       )
     }
 
-    let approved: Bool
-    if ProcessInfo.processInfo.environment[autoApproveEnv] == "1" {
-      approved = true
-    } else {
-      approved = approvalPrompter.prompt(url: credential.url, username: credential.username)
-    }
+    let approved = approvalPrompter.prompt(url: credential.url, username: credential.username)
 
     if !approved {
       return ResponseEnvelope(
