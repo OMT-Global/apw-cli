@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
+use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
@@ -299,7 +300,23 @@ fn socket_running() -> bool {
     if !socket_path.exists() {
         return false;
     }
+    if !socket_path_safe_to_connect(&socket_path) {
+        return false;
+    }
     UnixStream::connect(socket_path).is_ok()
+}
+
+fn socket_path_safe_to_connect(socket_path: &Path) -> bool {
+    let metadata = match fs::symlink_metadata(socket_path) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+
+    if !metadata.file_type().is_socket() {
+        return false;
+    }
+
+    metadata.permissions().mode() & 0o777 == NATIVE_APP_FILE_MODE
 }
 
 fn parse_response(payload: Value) -> Result<Value> {
@@ -340,6 +357,16 @@ fn parse_response(payload: Value) -> Result<Value> {
 fn send_request(command: &str, payload: Value) -> Result<Value> {
     let socket_path = native_app_socket_path();
     if !socket_path.exists() {
+        return send_request_via_executable(command, payload);
+    }
+    if !socket_path_safe_to_connect(&socket_path) {
+        logging::warn(
+            "native-app",
+            format!(
+                "broker socket at {} failed security checks, falling back to direct execution",
+                socket_path.display()
+            ),
+        );
         return send_request_via_executable(command, payload);
     }
 
@@ -1018,6 +1045,7 @@ mod tests {
     use super::*;
     use crate::types::APWConfigV1;
     use serial_test::serial;
+    use std::os::unix::net::UnixListener;
     use tempfile::TempDir;
 
     fn with_temp_home<F, R>(run: F) -> R
@@ -1256,6 +1284,102 @@ else:
             let error = native_app_login("https://vault.example.com").unwrap_err();
             assert_eq!(error.code, Status::InvalidConfig);
             assert!(error.message.contains("absolute executable path"));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn invalid_socket_permissions_fall_back_to_direct_exec() {
+        with_temp_home(|| {
+            ensure_runtime_dir().unwrap();
+            let socket_path = native_app_socket_path();
+            let listener = UnixListener::bind(&socket_path).unwrap();
+            fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o666)).unwrap();
+
+            let bundle_dir = native_app_bundle_install_path();
+            fs::create_dir_all(bundle_dir.parent().unwrap()).unwrap();
+            fs::create_dir_all(bundle_dir.join("Contents").join("MacOS")).unwrap();
+
+            let executable = native_app_executable_in_bundle(&bundle_dir);
+            fs::write(
+                &executable,
+                r##"#!/usr/bin/env python3
+import json
+import sys
+
+payload = json.loads(sys.argv[3])
+print(json.dumps({
+  "ok": True,
+  "code": 0,
+  "payload": {
+    "status": "approved",
+    "url": payload["url"],
+    "domain": "example.com",
+    "username": "demo@example.com",
+    "password": "fallback-secret",
+    "transport": "direct_exec",
+    "intent": sys.argv[2],
+    "userMediated": True
+  }
+}))
+"##,
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&executable).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&executable, permissions).unwrap();
+
+            let payload = native_app_login("https://example.com").unwrap();
+            assert_eq!(payload["transport"], "direct_exec");
+
+            drop(listener);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn stale_socket_file_falls_back_to_direct_exec() {
+        with_temp_home(|| {
+            ensure_runtime_dir().unwrap();
+            let socket_path = native_app_socket_path();
+            fs::write(&socket_path, b"stale").unwrap();
+            fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+            let bundle_dir = native_app_bundle_install_path();
+            fs::create_dir_all(bundle_dir.parent().unwrap()).unwrap();
+            fs::create_dir_all(bundle_dir.join("Contents").join("MacOS")).unwrap();
+
+            let executable = native_app_executable_in_bundle(&bundle_dir);
+            fs::write(
+                &executable,
+                r##"#!/usr/bin/env python3
+import json
+import sys
+
+payload = json.loads(sys.argv[3])
+print(json.dumps({
+  "ok": True,
+  "code": 0,
+  "payload": {
+    "status": "approved",
+    "url": payload["url"],
+    "domain": "example.com",
+    "username": "demo@example.com",
+    "password": "fallback-secret",
+    "transport": "direct_exec",
+    "intent": sys.argv[2],
+    "userMediated": True
+  }
+}))
+"##,
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&executable).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&executable, permissions).unwrap();
+
+            let payload = native_app_login("https://example.com").unwrap();
+            assert_eq!(payload["transport"], "direct_exec");
         });
     }
 }

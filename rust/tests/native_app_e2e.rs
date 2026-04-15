@@ -223,6 +223,7 @@ def serve():
 
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(str(sock_path))
+    os.chmod(sock_path, FILE_MODE)
     server.listen(8)
     server.settimeout(1.0)
     write_status(
