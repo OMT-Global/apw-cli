@@ -2,7 +2,7 @@
 
     ## Repo Governance
 
-    - Confirm the repository exists at `OMT-Global/apw`.
+    - Confirm the repository exists at `OMT-Global/apw-cli`.
     - Confirm branch protection or rulesets on `main` require one approval and code owner review.
     - Confirm branch protection points at the `CI Gate` status.
     - Confirm `delete branch on merge` and `allow auto-merge` are enabled.

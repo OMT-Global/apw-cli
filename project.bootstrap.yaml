@@ -1,6 +1,6 @@
 version: 1
 project:
-  name: apw
+  name: apw-cli
   description: A CLI for Apple Passwords (also known as iCloud Keychain)
   visibility: public
   owner: OMT-Global
