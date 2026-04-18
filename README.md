@@ -10,6 +10,9 @@ Release reference version: `v2.0.0`
 This project is not affiliated with Apple. It interoperates with Apple-provided
 password infrastructure on supported macOS versions.
 
+> Note: APW CLI was historically forked from `bendews/apw`, but the current
+> `v2` line is a substantially rewritten Rust-first implementation.
+
 ## Project status
 
 - `main` now tracks the `v2.0.0` native-only redesign line.
