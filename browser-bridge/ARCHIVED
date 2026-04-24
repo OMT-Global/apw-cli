@@ -1,0 +1,9 @@
+browser-bridge is archived.
+
+This directory contains the legacy browser extension bridge retained for
+migration audits and historical reference only. It is not part of the supported
+APW v2 runtime, release gates, or packaging path.
+
+Do not add new behavior here. If a future release needs browser integration
+again, create a new maintained component with explicit CI instead of reviving
+this archived bridge in place.

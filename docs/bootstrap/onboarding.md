@@ -20,6 +20,11 @@
     - Keep PR checks cheap. Add heavy validation to `scripts/ci/run-extended-validation.sh` instead of the PR lane.
     - APW extended validation now requires both Rust (`cargo`) and the macOS Swift toolchain, so the `extended-checks` job must stay on a GitHub-hosted macOS runner rather than the Synology shell-only pool.
 
+    ## Release Prep
+
+    - Run `scripts/bump-version.sh <version>` from the repository root to update all version-bearing release surfaces.
+    - Run `bash scripts/ci/run-fast-checks.sh` after version bumps before opening a release PR.
+
     ## Home Profiles
 
     - Run `project-bootstrap apply home --manifest ./project.bootstrap.yaml` after reviewing the bundled profile content.

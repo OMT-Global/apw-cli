@@ -60,6 +60,6 @@ git push -u origin main
 
 Related docs:
 
-- [README.md](/Users/johnteneyckjr./src/apw/README.md)
-- [docs/MIGRATION_AND_PARITY.md](/Users/johnteneyckjr./src/apw/docs/MIGRATION_AND_PARITY.md)
-- [docs/SECURITY_POSTURE_AND_TESTING.md](/Users/johnteneyckjr./src/apw/docs/SECURITY_POSTURE_AND_TESTING.md)
+- [README.md](../README.md)
+- [MIGRATION_AND_PARITY.md](MIGRATION_AND_PARITY.md)
+- [SECURITY_POSTURE_AND_TESTING.md](SECURITY_POSTURE_AND_TESTING.md)

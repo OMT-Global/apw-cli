@@ -6,6 +6,16 @@ cd "$ROOT_DIR"
 
 echo "Running APW fast checks..."
 
+if find . -path './.git' -prune -o -name '*.md' -print0 | xargs -0 grep -In '/Users/'; then
+  echo "Found machine-local absolute paths in markdown docs." >&2
+  exit 1
+fi
+
+if [ ! -x scripts/bump-version.sh ]; then
+  echo "scripts/bump-version.sh must be executable." >&2
+  exit 1
+fi
+
 chmod +x ./.github/scripts/verify-version-sync.sh
 ./.github/scripts/verify-version-sync.sh \
   rust/Cargo.toml \

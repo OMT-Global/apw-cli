@@ -8,12 +8,12 @@ Release reference version: `v2.0.0`
 
 ## Current maintenance policy
 
-- Supported v2 implementation: [`rust/`](/Users/johnteneyckjr./src/apw/rust) + `native-app/`
-- Archived implementation: [`legacy/deno/`](/Users/johnteneyckjr./src/apw/legacy/deno)
+- Supported v2 implementation: [`rust/`](../rust/) + `native-app/`
+- Archived implementation: [`legacy/deno/`](../legacy/deno/)
 - Packaging, release, fixes, and hardening land in the Rust CLI and native app
 - Legacy daemon/browser-helper code remains in-tree for migration only
 
-Archive rules: [docs/ARCHIVE_POLICY.md](/Users/johnteneyckjr./src/apw/docs/ARCHIVE_POLICY.md)
+Archive rules: [ARCHIVE_POLICY.md](ARCHIVE_POLICY.md)
 
 ## Parity target
 
@@ -27,7 +27,7 @@ The `v2.0.0` line intentionally changes that contract:
 - OTP parity is not guaranteed
 
 The command migration matrix is tracked in
-[docs/NATIVE_MIGRATION.md](/Users/johnteneyckjr./src/apw/docs/NATIVE_MIGRATION.md).
+[NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
 
 ## Automated coverage
 
@@ -57,6 +57,6 @@ Before tagging a public release:
 
 Related docs:
 
-- [docs/INSTALLATION.md](/Users/johnteneyckjr./src/apw/docs/INSTALLATION.md)
-- [docs/SECURITY_POSTURE_AND_TESTING.md](/Users/johnteneyckjr./src/apw/docs/SECURITY_POSTURE_AND_TESTING.md)
-- [docs/NATIVE_MIGRATION.md](/Users/johnteneyckjr./src/apw/docs/NATIVE_MIGRATION.md)
+- [INSTALLATION.md](INSTALLATION.md)
+- [SECURITY_POSTURE_AND_TESTING.md](SECURITY_POSTURE_AND_TESTING.md)
+- [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md)
