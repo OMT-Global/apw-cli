@@ -59,4 +59,4 @@ The Rust test suite covers:
 The Deno implementation is archived and not part of the supported security
 surface. Use it only for compatibility audit work.
 
-Archive rules: [docs/ARCHIVE_POLICY.md](/Users/johnteneyckjr./src/apw/docs/ARCHIVE_POLICY.md)
+Archive rules: [ARCHIVE_POLICY.md](ARCHIVE_POLICY.md)

@@ -66,7 +66,7 @@ This validates:
 
 ### Publish your own tap
 
-Use [`packaging/homebrew/apw.rb`](/Users/johnteneyckjr./src/apw/packaging/homebrew/apw.rb)
+Use [`packaging/homebrew/apw.rb`](../packaging/homebrew/apw.rb)
 as the formula template.
 
 After installing with Homebrew, install the per-user APW app bundle:
