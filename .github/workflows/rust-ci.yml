@@ -7,6 +7,8 @@ permissions:
 
 jobs:
   test:
+    # Hosted fallback: the Synology shell-only pool does not provide a C toolchain,
+    # and apt-based provisioning is blocked by container permissions.
     runs-on: ubuntu-latest
 
     steps:
@@ -15,6 +17,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Rust format check
         run: cargo fmt --manifest-path rust/Cargo.toml -- --check

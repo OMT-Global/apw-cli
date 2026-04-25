@@ -5,6 +5,8 @@ on:
 
 jobs:
   lint:
+    # Hosted fallback: the Synology shell-only pool does not provide a C toolchain,
+    # and apt-based provisioning is blocked by container permissions.
     runs-on: ubuntu-latest
 
     steps:
@@ -12,6 +14,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       
       - name: Verify version sync
         run: |

@@ -23,7 +23,7 @@ defaults:
 jobs:
   changes:
     name: Detect Relevant Changes
-    runs-on: ubuntu-latest
+    runs-on: ['self-hosted', 'synology', 'shell-only', 'public']
     outputs:
       app: ${{ steps.filter.outputs.app }}
       ci: ${{ steps.filter.outputs.ci }}
@@ -58,7 +58,7 @@ jobs:
 
   fast-checks:
     name: Fast Checks
-    runs-on: ubuntu-latest
+    runs-on: ['self-hosted', 'synology', 'shell-only', 'public']
     timeout-minutes: 15
     needs: changes
     if: >-
@@ -78,7 +78,7 @@ jobs:
 
   native-app-swift-tests:
     name: Native App Swift Tests
-    runs-on: ['self-hosted', 'public', 'macOS', 'ARM64', 'xcode']
+    runs-on: ['self-hosted', 'private', 'macOS', 'ARM64', 'xcode']
     timeout-minutes: 20
     needs: changes
     if: >-
@@ -94,7 +94,7 @@ jobs:
 
   validate-secrets:
     name: Validate Secrets
-    runs-on: ubuntu-latest
+    runs-on: ['self-hosted', 'synology', 'shell-only', 'public']
     timeout-minutes: 10
     if: github.event.pull_request.draft == false
     steps:
@@ -106,7 +106,7 @@ jobs:
 
   ci-gate:
     name: CI Gate
-    runs-on: ubuntu-latest
+    runs-on: ['self-hosted', 'synology', 'shell-only', 'public']
     if: always()
     needs:
       - changes
