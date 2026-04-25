@@ -5,7 +5,7 @@ on:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ['self-hosted', 'synology', 'shell-only', 'public']
 
     steps:
       - uses: actions/checkout@v5

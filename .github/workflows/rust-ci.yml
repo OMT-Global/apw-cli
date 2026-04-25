@@ -7,7 +7,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ['self-hosted', 'synology', 'shell-only', 'public']
 
     steps:
       - name: Setup repo
