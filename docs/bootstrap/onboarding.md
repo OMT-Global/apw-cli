@@ -18,7 +18,7 @@
     - Shell-safe jobs may use `[self-hosted, synology, shell-only, public]`.
     - Docker, service-container, browser, and `container:` workloads stay on GitHub-hosted runners.
     - Keep PR checks cheap. Add heavy validation to `scripts/ci/run-extended-validation.sh` instead of the PR lane.
-    - APW extended validation now requires both Rust (`cargo`) and the macOS Swift toolchain, so the `extended-checks` job must stay on a GitHub-hosted macOS runner rather than the Synology shell-only pool.
+    - APW extended validation requires both Rust (`cargo`) and the macOS Swift toolchain, so the `extended-checks` job must run on the org macOS self-hosted pool (`[self-hosted, private, macOS, ARM64, xcode]`) rather than the Synology shell-only pool.
 
     ## Release Prep
 

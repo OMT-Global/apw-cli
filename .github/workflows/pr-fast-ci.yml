@@ -78,7 +78,7 @@ jobs:
 
   native-app-swift-tests:
     name: Native App Swift Tests
-    runs-on: ['self-hosted', 'public', 'macOS', 'ARM64', 'xcode']
+    runs-on: ['self-hosted', 'private', 'macOS', 'ARM64', 'xcode']
     timeout-minutes: 20
     needs: changes
     if: >-
