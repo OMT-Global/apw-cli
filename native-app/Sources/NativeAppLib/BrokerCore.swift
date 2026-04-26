@@ -10,6 +10,13 @@ private let appSocketName = "broker.sock"
 private let statusFileName = "status.json"
 private let credentialsFileName = "credentials.json"
 
+/// Wall-clock timeout for a single broker IPC exchange (read or write half)
+/// between the Swift app broker and the Rust CLI. The Rust client mirrors
+/// this constant in `native_app.rs` as `BROKER_REQUEST_TIMEOUT_MS`. When
+/// the timeout fires, the broker drops the connection rather than blocking
+/// indefinitely on a hung peer. See issue #2.
+let brokerRequestTimeoutMs: Int = 3_000
+
 /// Environment variable that opts the broker into the demo bootstrap path.
 /// When unset, the broker never materializes a plaintext credentials file
 /// and returns `no_credential_source` for login requests. See issue #14.
@@ -173,6 +180,16 @@ final class BrokerServer {
       if client < 0 {
         continue
       }
+
+      // Bound the lifetime of any single broker exchange. A peer that stops
+      // sending or stops draining must not block the broker forever. See
+      // issue #2 / `brokerRequestTimeoutMs`.
+      var tv = timeval(
+        tv_sec: brokerRequestTimeoutMs / 1000,
+        tv_usec: __darwin_suseconds_t((brokerRequestTimeoutMs % 1000) * 1000)
+      )
+      setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+      setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
 
       autoreleasepool {
         let handle = FileHandle(fileDescriptor: client, closeOnDealloc: true)

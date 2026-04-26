@@ -831,3 +831,28 @@ fn parity_command_matrix_matches_legacy() {
 
     handle.join().expect("daemon failed");
 }
+
+#[test]
+#[serial]
+fn deprecated_legacy_commands_emit_stderr_warning() {
+    // Regression for issue #9: every CLI subcommand routed through the
+    // legacy daemon path must announce its deprecation on stderr so that
+    // pinned scripts get a migration signal before the daemon is removed.
+    run_with_temp_home(|home| {
+        for command in ["pw", "otp"] {
+            let output = run_rust_cli(home, &[command, "list", "https://example.com"]);
+            assert!(
+                output.stderr.contains("legacy daemon path"),
+                "`apw {command}` must emit the deprecation warning on stderr; got stderr=\"{}\"",
+                output.stderr
+            );
+        }
+
+        let auth = run_rust_cli(home, &["auth", "--pin", "12ab"]);
+        assert!(
+            auth.stderr.contains("legacy daemon path"),
+            "`apw auth` must emit the deprecation warning; got stderr=\"{}\"",
+            auth.stderr
+        );
+    });
+}

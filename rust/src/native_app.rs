@@ -27,7 +27,14 @@ const NATIVE_APP_RUNTIME_DIR_MODE: u32 = 0o700;
 const NATIVE_APP_FILE_MODE: u32 = 0o600;
 const MAX_BROKER_BYTES: usize = MAX_MESSAGE_BYTES;
 const MAX_BROKER_LOG_BYTES: u64 = 10 * 1024 * 1024;
-const SOCKET_TIMEOUT_MS: u64 = 3_000;
+
+/// Wall-clock timeout for a single broker IPC exchange (read or write half)
+/// between the Rust CLI and the Swift app broker over the local UNIX socket.
+/// The Swift broker mirrors this constant in `BrokerCore.swift` as
+/// `brokerRequestTimeoutMs`. When the timeout fires the CLI returns
+/// `CommunicationTimeout` instead of hanging. See issue #2.
+pub const BROKER_REQUEST_TIMEOUT_MS: u64 = 3_000;
+const SOCKET_TIMEOUT_MS: u64 = BROKER_REQUEST_TIMEOUT_MS;
 const CONNECT_RETRIES: usize = 10;
 const CONNECT_RETRY_DELAY_MS: u64 = 200;
 
@@ -1660,6 +1667,44 @@ else:
                 error.message.contains("exceeding the configured limit"),
                 "expected rate-limit error, got: {}",
                 error.message
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn broker_request_times_out_when_peer_never_replies() {
+        with_temp_home(|| {
+            ensure_runtime_dir().unwrap();
+            let socket_path = native_app_socket_path();
+            let listener = UnixListener::bind(&socket_path).unwrap();
+            fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+            // Park a thread that accepts the connection but never replies.
+            // This emulates a hung native app. The CLI must abort within
+            // BROKER_REQUEST_TIMEOUT_MS rather than block forever.
+            let handle = std::thread::spawn(move || {
+                if let Ok((stream, _)) = listener.accept() {
+                    std::thread::sleep(Duration::from_secs(30));
+                    drop(stream);
+                }
+            });
+
+            let started = std::time::Instant::now();
+            let result = send_request("status", json!({}));
+            let elapsed = started.elapsed();
+
+            // Tear the parked acceptor down so the test can finish.
+            drop(handle);
+
+            assert!(
+                result.is_err(),
+                "expected a CommunicationTimeout, got: {result:?}"
+            );
+            let bound = Duration::from_millis(BROKER_REQUEST_TIMEOUT_MS) + Duration::from_secs(1);
+            assert!(
+                elapsed < bound,
+                "request must abort within {bound:?} (took {elapsed:?})"
             );
         });
     }

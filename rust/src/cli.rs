@@ -265,6 +265,9 @@ pub struct FillCommand {
 }
 
 #[derive(Args)]
+#[command(
+    long_about = "DEPRECATED: `apw auth` is part of the legacy daemon path and will be removed in v2.1.0. See docs/MIGRATION_AND_PARITY.md."
+)]
 pub struct AuthCommand {
     #[command(subcommand)]
     pub command: Option<AuthSubcommand>,
@@ -313,6 +316,9 @@ pub struct HostDoctorArgs {
 }
 
 #[derive(Args)]
+#[command(
+    long_about = "DEPRECATED: `apw pw` is part of the legacy daemon path and will be removed in v2.1.0. Use `apw login`/`apw fill` for the v2 broker. See docs/MIGRATION_AND_PARITY.md."
+)]
 pub struct PwCommand {
     #[command(subcommand)]
     pub action: Option<PwAction>,
@@ -331,6 +337,9 @@ pub enum PwAction {
 }
 
 #[derive(Args)]
+#[command(
+    long_about = "DEPRECATED: `apw otp` is part of the legacy daemon path and will be removed in v2.1.0. See docs/MIGRATION_AND_PARITY.md."
+)]
 pub struct OtpCommand {
     #[command(subcommand)]
     pub action: Option<OtpAction>,
@@ -343,6 +352,9 @@ pub enum OtpAction {
 }
 
 #[derive(Args)]
+#[command(
+    long_about = "DEPRECATED: `apw start` launches the legacy WebSocket daemon and will be removed in v2.1.0. The v2 broker runs as a per-user app under `apw app launch`. See docs/MIGRATION_AND_PARITY.md."
+)]
 pub struct StartCommand {
     #[arg(short, long, default_value_t = 0)]
     pub port: u16,
@@ -453,6 +465,7 @@ fn run_auth(
     args: AuthCommand,
     cli_json: bool,
 ) -> Result<(), APWError> {
+    warn_legacy_daemon_path("auth");
     let result = match args.command {
         Some(AuthSubcommand::Logout) => {
             manager.logout()?;
@@ -513,6 +526,7 @@ fn run_pw(
     args: PwCommand,
     cli_json: bool,
 ) -> Result<(), APWError> {
+    warn_legacy_daemon_path("pw");
     match args.action {
         Some(PwAction::Get { url, username }) => {
             let payload = manager.get_password_for_url(
@@ -548,6 +562,7 @@ fn run_otp(
     args: OtpCommand,
     cli_json: bool,
 ) -> Result<(), APWError> {
+    warn_legacy_daemon_path("otp");
     match args.action {
         Some(OtpAction::Get { url }) => {
             let payload = manager.get_otp_for_url(&sanitize_url(&url)?)?;
@@ -575,6 +590,7 @@ fn run_otp(
 }
 
 async fn run_start(args: StartCommand) -> Result<(), APWError> {
+    warn_legacy_daemon_path("start");
     logging::info(
         "daemon",
         format!("starting daemon on {}:{}", args.bind, args.port),
@@ -676,6 +692,20 @@ fn validate_semver_identifiers(
     }
 
     Ok(())
+}
+
+/// Emit a one-line stderr warning for legacy daemon-routed commands so that
+/// scripts pinned to v1 paths can be migrated before the daemon is removed.
+/// Suppressed in `--json` mode to avoid polluting machine-readable output;
+/// the JSON envelope already exposes `releaseLine` for migration signals.
+/// See issue #9.
+fn warn_legacy_daemon_path(command_name: &str) {
+    logging::warn(
+        "deprecated",
+        format!(
+            "`apw {command_name}` uses the legacy daemon path and will be removed in a future release. See docs/MIGRATION_AND_PARITY.md."
+        ),
+    );
 }
 
 fn parse_runtime_mode(raw: &str) -> std::result::Result<RuntimeMode, String> {

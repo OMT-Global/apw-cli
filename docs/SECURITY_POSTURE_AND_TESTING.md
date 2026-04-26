@@ -43,6 +43,24 @@ Release reference version: `v2.0.0`
 - requests and responses use typed JSON envelopes with bounded payload sizes
 - bootstrap credentials are stored in a local runtime file for the supported demo domain only
 
+### Timeouts and failure modes
+
+A single broker IPC exchange between the Rust CLI and the Swift broker is
+bounded on both halves of the connection by a shared timeout. (issue #2)
+
+| Side  | Constant                       | Value          | Behavior on timeout                                |
+| ----- | ------------------------------ | -------------- | -------------------------------------------------- |
+| Rust  | `BROKER_REQUEST_TIMEOUT_MS`    | 3000 ms        | `send_request` returns `Status::CommunicationTimeout`; CLI exits non-zero, no credential leak |
+| Swift | `brokerRequestTimeoutMs`       | 3000 ms        | per-connection `SO_RCVTIMEO`/`SO_SNDTIMEO`; broker drops the client and continues serving         |
+
+External fallback exec is bounded separately by
+`APW_FALLBACK_TIMEOUT_MS` (default 15000 ms; see issue #3).
+
+A regression test in `rust/src/native_app.rs`
+(`broker_request_times_out_when_peer_never_replies`) parks a Unix-socket
+acceptor that never replies and asserts the CLI aborts within
+`BROKER_REQUEST_TIMEOUT_MS + 1s`.
+
 ## Required release gates
 
 Run these before publishing:
