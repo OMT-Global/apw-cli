@@ -7,11 +7,14 @@ use std::env;
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::time::Duration;
 
 const NATIVE_APP_BUNDLE_NAME: &str = "APW.app";
@@ -27,6 +30,207 @@ const MAX_BROKER_LOG_BYTES: u64 = 10 * 1024 * 1024;
 const SOCKET_TIMEOUT_MS: u64 = 3_000;
 const CONNECT_RETRIES: usize = 10;
 const CONNECT_RETRY_DELAY_MS: u64 = 200;
+
+/// Environment variable that opts the bootstrap flow into materializing a
+/// plaintext demo credentials file. Without it, `apw app install` /
+/// `apw doctor` never write `credentials.json`. See issue #14.
+pub const APW_DEMO_ENV: &str = "APW_DEMO";
+
+fn demo_mode_enabled() -> bool {
+    matches!(env::var(APW_DEMO_ENV).as_deref(), Ok("1"))
+}
+
+/// Default per-invocation timeout for an external fallback provider exec.
+/// Overridable via `APW_FALLBACK_TIMEOUT_MS`. See issue #3.
+const DEFAULT_FALLBACK_TIMEOUT_MS: u64 = 15_000;
+
+/// Default per-process invocation cap for external fallback providers.
+/// Overridable via `APW_FALLBACK_INVOCATION_LIMIT`. See issue #3.
+const DEFAULT_FALLBACK_INVOCATION_LIMIT: usize = 5;
+
+static FALLBACK_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+fn fallback_timeout() -> Duration {
+    let ms = env::var("APW_FALLBACK_TIMEOUT_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_FALLBACK_TIMEOUT_MS);
+    Duration::from_millis(ms)
+}
+
+fn fallback_invocation_limit() -> usize {
+    env::var("APW_FALLBACK_INVOCATION_LIMIT")
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_FALLBACK_INVOCATION_LIMIT)
+}
+
+fn record_fallback_invocation() -> Result<()> {
+    let limit = fallback_invocation_limit();
+    let count = FALLBACK_INVOCATIONS.fetch_add(1, Ordering::SeqCst) + 1;
+    if count > limit {
+        return Err(APWError::new(
+            Status::GenericError,
+            format!(
+                "External fallback provider invoked {count} times this session, exceeding the configured limit of {limit}. Restart `apw` to reset, or raise APW_FALLBACK_INVOCATION_LIMIT."
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn reset_fallback_invocations_for_tests() {
+    FALLBACK_INVOCATIONS.store(0, Ordering::SeqCst);
+}
+
+/// Validate an external fallback-provider path before exec. The returned
+/// `PathBuf` is the canonicalized path safe to hand to `Command::new`. The
+/// validation is best-effort against TOCTOU — the file is re-stat'd via the
+/// canonical path immediately before exec, but a fully race-free path would
+/// require `fexecve` against a previously opened fd. See issue #1.
+fn validate_provider_path(provider_label: &str, raw: &str) -> Result<PathBuf> {
+    if raw.starts_with('~') {
+        return Err(APWError::new(
+            Status::InvalidConfig,
+            format!(
+                "Fallback provider `{provider_label}` path must not start with `~`; expand it to an absolute filesystem path."
+            ),
+        ));
+    }
+
+    let candidate = PathBuf::from(raw);
+    if !candidate.is_absolute() {
+        return Err(APWError::new(
+            Status::InvalidConfig,
+            format!("Fallback provider `{provider_label}` must use an absolute executable path."),
+        ));
+    }
+
+    let canonical = fs::canonicalize(&candidate).map_err(|error| {
+        APWError::new(
+            Status::InvalidConfig,
+            format!(
+                "Fallback provider `{provider_label}` path {} is not reachable: {error}",
+                candidate.display()
+            ),
+        )
+    })?;
+
+    let metadata = fs::metadata(&canonical).map_err(|error| {
+        APWError::new(
+            Status::InvalidConfig,
+            format!(
+                "Fallback provider `{provider_label}` path {} cannot be stat'd: {error}",
+                canonical.display()
+            ),
+        )
+    })?;
+
+    if !metadata.file_type().is_file() {
+        return Err(APWError::new(
+            Status::InvalidConfig,
+            format!(
+                "Fallback provider `{provider_label}` path {} must be a regular file.",
+                canonical.display()
+            ),
+        ));
+    }
+
+    let mode = metadata.permissions().mode();
+    if mode & 0o002 != 0 {
+        return Err(APWError::new(
+            Status::InvalidConfig,
+            format!(
+                "Fallback provider `{provider_label}` path {} is world-writable (mode {:o}); refuse to exec.",
+                canonical.display(),
+                mode & 0o777
+            ),
+        ));
+    }
+    if mode & 0o111 == 0 {
+        return Err(APWError::new(
+            Status::InvalidConfig,
+            format!(
+                "Fallback provider `{provider_label}` path {} has no execute bit (mode {:o}).",
+                canonical.display(),
+                mode & 0o777
+            ),
+        ));
+    }
+
+    let euid = unsafe { libc::geteuid() };
+    if metadata.uid() != euid {
+        return Err(APWError::new(
+            Status::InvalidConfig,
+            format!(
+                "Fallback provider `{provider_label}` path {} is owned by uid {} but the current process runs as uid {}; refuse to exec.",
+                canonical.display(),
+                metadata.uid(),
+                euid
+            ),
+        ));
+    }
+
+    Ok(canonical)
+}
+
+/// Run a `Command` with a wall-clock timeout, killing the child if it does
+/// not terminate in time. See issue #3.
+fn run_provider_command(provider_label: &str, mut command: Command) -> Result<Output> {
+    record_fallback_invocation()?;
+
+    let timeout = fallback_timeout();
+    let child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            APWError::new(
+                Status::ProcessNotRunning,
+                format!("Failed to spawn `{provider_label}`: {error}"),
+            )
+        })?;
+
+    let pid = child.id() as i32;
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(error)) => Err(APWError::new(
+            Status::ProcessNotRunning,
+            format!("`{provider_label}` exec failed: {error}"),
+        )),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+            logging::warn(
+                "native-app",
+                format!(
+                    "killed `{provider_label}` after {} ms; provider exceeded APW_FALLBACK_TIMEOUT_MS.",
+                    timeout.as_millis()
+                ),
+            );
+            Err(APWError::new(
+                Status::CommunicationTimeout,
+                format!(
+                    "External fallback provider `{provider_label}` did not respond within {} ms.",
+                    timeout.as_millis()
+                ),
+            ))
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(APWError::new(
+            Status::GenericError,
+            format!("`{provider_label}` exec channel closed unexpectedly."),
+        )),
+    }
+}
 
 fn home_dir() -> PathBuf {
     match env::var("HOME").or_else(|_| env::var("USERPROFILE")) {
@@ -268,6 +472,9 @@ fn default_credentials_payload() -> Value {
 }
 
 fn ensure_default_credentials_file() -> Result<()> {
+    if !demo_mode_enabled() {
+        return Ok(());
+    }
     let path = native_app_credentials_path();
     if path.exists() {
         return Ok(());
@@ -285,10 +492,10 @@ fn ensure_default_credentials_file() -> Result<()> {
         )
     })?;
     set_permissions(&path, NATIVE_APP_FILE_MODE)?;
-    logging::info(
+    logging::warn(
         "native-app",
         format!(
-            "created demo credentials file at {}. This file contains placeholder credentials; replace them before use.",
+            "APW_DEMO=1 set; wrote placeholder credentials to {}. Disable APW_DEMO before shipping.",
             path.display()
         ),
     );
@@ -701,7 +908,7 @@ fn external_provider_login(url: &str) -> Result<Option<Value>> {
     let Some(provider) = config.fallback_provider else {
         return Ok(None);
     };
-    let Some(provider_path) = config.fallback_provider_path.as_deref() else {
+    let Some(raw_path) = config.fallback_provider_path.as_deref() else {
         return Err(APWError::new(
             Status::InvalidConfig,
             format!(
@@ -710,16 +917,7 @@ fn external_provider_login(url: &str) -> Result<Option<Value>> {
             ),
         ));
     };
-    let provider_path = PathBuf::from(provider_path);
-    if !provider_path.is_absolute() {
-        return Err(APWError::new(
-            Status::InvalidConfig,
-            format!(
-                "Fallback provider `{}` must use an absolute executable path.",
-                provider.as_str()
-            ),
-        ));
-    }
+    let provider_path = validate_provider_path(provider.as_str(), raw_path)?;
 
     let host = url::Url::parse(url)
         .map_err(|_| APWError::new(Status::InvalidParam, "Invalid URL for external fallback."))?
@@ -739,23 +937,15 @@ fn external_provider_login(url: &str) -> Result<Option<Value>> {
 }
 
 fn load_1password_credential(path: &Path, host: &str, raw_url: &str) -> Result<Value> {
-    let list_output = Command::new(path)
+    let mut list_command = Command::new(path);
+    list_command
         .arg("item")
         .arg("list")
         .arg("--categories")
         .arg("LOGIN")
         .arg("--format")
-        .arg("json")
-        .output()
-        .map_err(|error| {
-            APWError::new(
-                Status::ProcessNotRunning,
-                format!(
-                    "Failed to execute 1Password CLI at {}: {error}",
-                    path.display()
-                ),
-            )
-        })?;
+        .arg("json");
+    let list_output = run_provider_command("1password", list_command)?;
     if !list_output.status.success() {
         return Err(APWError::new(
             Status::NoResults,
@@ -793,22 +983,14 @@ fn load_1password_credential(path: &Path, host: &str, raw_url: &str) -> Result<V
             )
         })?;
 
-    let output = Command::new(path)
+    let mut get_command = Command::new(path);
+    get_command
         .arg("item")
         .arg("get")
         .arg(item_id)
         .arg("--format")
-        .arg("json")
-        .output()
-        .map_err(|error| {
-            APWError::new(
-                Status::ProcessNotRunning,
-                format!(
-                    "Failed to execute 1Password CLI at {}: {error}",
-                    path.display()
-                ),
-            )
-        })?;
+        .arg("json");
+    let output = run_provider_command("1password", get_command)?;
     if !output.status.success() {
         return Err(APWError::new(
             Status::NoResults,
@@ -882,21 +1064,9 @@ fn load_1password_credential(path: &Path, host: &str, raw_url: &str) -> Result<V
 }
 
 fn load_bitwarden_credential(path: &Path, host: &str, raw_url: &str) -> Result<Value> {
-    let output = Command::new(path)
-        .arg("list")
-        .arg("items")
-        .arg("--search")
-        .arg(host)
-        .output()
-        .map_err(|error| {
-            APWError::new(
-                Status::ProcessNotRunning,
-                format!(
-                    "Failed to execute Bitwarden CLI at {}: {error}",
-                    path.display()
-                ),
-            )
-        })?;
+    let mut command = Command::new(path);
+    command.arg("list").arg("items").arg("--search").arg(host);
+    let output = run_provider_command("bitwarden", command)?;
     if !output.status.success() {
         return Err(APWError::new(
             Status::NoResults,
@@ -1064,16 +1234,50 @@ mod tests {
         result
     }
 
+    fn with_demo_env<F, R>(run: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        let previous = env::var(APW_DEMO_ENV).ok();
+        env::set_var(APW_DEMO_ENV, "1");
+        let result = run();
+        if let Some(value) = previous {
+            env::set_var(APW_DEMO_ENV, value);
+        } else {
+            env::remove_var(APW_DEMO_ENV);
+        }
+        result
+    }
+
     #[test]
     #[serial]
-    fn doctor_creates_default_credentials_file() {
+    fn doctor_does_not_create_credentials_by_default() {
         with_temp_home(|| {
+            env::remove_var(APW_DEMO_ENV);
             let payload = native_app_doctor().unwrap();
             assert_eq!(
                 payload["frameworks"]["authenticationServicesLinked"],
                 json!(true)
             );
-            assert!(native_app_credentials_path().exists());
+            assert!(
+                !native_app_credentials_path().exists(),
+                "credentials.json must not be materialized without APW_DEMO=1"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn doctor_creates_default_credentials_when_demo_env_set() {
+        with_temp_home(|| {
+            with_demo_env(|| {
+                let payload = native_app_doctor().unwrap();
+                assert_eq!(
+                    payload["frameworks"]["authenticationServicesLinked"],
+                    json!(true)
+                );
+                assert!(native_app_credentials_path().exists());
+            });
         });
     }
 
@@ -1139,6 +1343,7 @@ print(json.dumps({"ok": True, "code": 0, "payload": payload}))
     #[serial]
     fn login_can_fallback_to_1password_cli() {
         with_temp_home(|| {
+            reset_fallback_invocations_for_tests();
             let provider_dir = TempDir::new().unwrap();
             let provider_path = provider_dir.path().join("op");
             fs::write(
@@ -1203,6 +1408,7 @@ else:
     #[serial]
     fn login_bitwarden_fallback_matches_uri_before_selecting_item() {
         with_temp_home(|| {
+            reset_fallback_invocations_for_tests();
             let provider_dir = TempDir::new().unwrap();
             let provider_path = provider_dir.path().join("bw");
             fs::write(
@@ -1284,6 +1490,177 @@ else:
             let error = native_app_login("https://vault.example.com").unwrap_err();
             assert_eq!(error.code, Status::InvalidConfig);
             assert!(error.message.contains("absolute executable path"));
+        });
+    }
+
+    fn write_provider_config(provider_path: &Path) {
+        let config_root = home_dir().join(".apw");
+        fs::create_dir_all(&config_root).unwrap();
+        let config = APWConfigV1 {
+            username: "demo".to_string(),
+            shared_key: "demo-shared-key".to_string(),
+            fallback_provider: Some(ExternalFallbackProvider::Bitwarden),
+            fallback_provider_path: Some(provider_path.display().to_string()),
+            ..APWConfigV1::default()
+        };
+        fs::write(
+            config_root.join("config.json"),
+            serde_json::to_vec_pretty(&config).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn login_rejects_tilde_prefixed_provider_paths() {
+        with_temp_home(|| {
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::Bitwarden),
+                fallback_provider_path: Some("~/bin/bw".to_string()),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            let error = native_app_login("https://vault.example.com").unwrap_err();
+            assert_eq!(error.code, Status::InvalidConfig);
+            assert!(error.message.contains("must not start with `~`"));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn login_rejects_world_writable_provider_path() {
+        with_temp_home(|| {
+            reset_fallback_invocations_for_tests();
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("bw");
+            fs::write(&provider_path, "#!/bin/sh\necho ignored\n").unwrap();
+            fs::set_permissions(&provider_path, fs::Permissions::from_mode(0o777)).unwrap();
+            write_provider_config(&provider_path);
+
+            let error = native_app_login("https://vault.example.com").unwrap_err();
+            assert_eq!(error.code, Status::InvalidConfig);
+            assert!(
+                error.message.contains("world-writable"),
+                "expected world-writable rejection, got: {}",
+                error.message
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn login_rejects_non_executable_provider_path() {
+        with_temp_home(|| {
+            reset_fallback_invocations_for_tests();
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("bw");
+            fs::write(&provider_path, "#!/bin/sh\necho ignored\n").unwrap();
+            fs::set_permissions(&provider_path, fs::Permissions::from_mode(0o644)).unwrap();
+            write_provider_config(&provider_path);
+
+            let error = native_app_login("https://vault.example.com").unwrap_err();
+            assert_eq!(error.code, Status::InvalidConfig);
+            assert!(
+                error.message.contains("execute bit"),
+                "expected execute-bit rejection, got: {}",
+                error.message
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn login_rejects_unreachable_provider_path() {
+        with_temp_home(|| {
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::Bitwarden),
+                fallback_provider_path: Some("/no/such/path/bw".to_string()),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            let error = native_app_login("https://vault.example.com").unwrap_err();
+            assert_eq!(error.code, Status::InvalidConfig);
+            assert!(error.message.contains("not reachable"));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn login_times_out_when_provider_hangs() {
+        with_temp_home(|| {
+            reset_fallback_invocations_for_tests();
+            env::set_var("APW_FALLBACK_TIMEOUT_MS", "200");
+
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("bw");
+            fs::write(&provider_path, "#!/bin/sh\nsleep 30\n").unwrap();
+            fs::set_permissions(&provider_path, fs::Permissions::from_mode(0o755)).unwrap();
+            write_provider_config(&provider_path);
+
+            let started = std::time::Instant::now();
+            let error = native_app_login("https://vault.example.com").unwrap_err();
+            let elapsed = started.elapsed();
+
+            env::remove_var("APW_FALLBACK_TIMEOUT_MS");
+
+            assert_eq!(error.code, Status::CommunicationTimeout);
+            assert!(
+                elapsed < Duration::from_secs(5),
+                "fallback exec must abort near the 200ms timeout, took {elapsed:?}"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn login_enforces_session_invocation_limit() {
+        with_temp_home(|| {
+            reset_fallback_invocations_for_tests();
+            env::set_var("APW_FALLBACK_INVOCATION_LIMIT", "2");
+
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("bw");
+            fs::write(
+                &provider_path,
+                "#!/usr/bin/env python3\nimport json\nprint(json.dumps([]))\n",
+            )
+            .unwrap();
+            fs::set_permissions(&provider_path, fs::Permissions::from_mode(0o755)).unwrap();
+            write_provider_config(&provider_path);
+
+            // First two invocations are allowed (each call returns NoResults
+            // because the script returns an empty array — that's fine; we're
+            // only asserting the limit, not the result).
+            let _ = native_app_login("https://vault.example.com");
+            let _ = native_app_login("https://vault.example.com");
+
+            // Third should be refused by the rate limiter.
+            let error = native_app_login("https://vault.example.com").unwrap_err();
+            env::remove_var("APW_FALLBACK_INVOCATION_LIMIT");
+
+            assert!(
+                error.message.contains("exceeding the configured limit"),
+                "expected rate-limit error, got: {}",
+                error.message
+            );
         });
     }
 

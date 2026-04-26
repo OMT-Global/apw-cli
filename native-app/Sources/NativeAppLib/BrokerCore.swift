@@ -9,6 +9,15 @@ private let maxBrokerBytes = 32 * 1024
 private let appSocketName = "broker.sock"
 private let statusFileName = "status.json"
 private let credentialsFileName = "credentials.json"
+
+/// Environment variable that opts the broker into the demo bootstrap path.
+/// When unset, the broker never materializes a plaintext credentials file
+/// and returns `no_credential_source` for login requests. See issue #14.
+let demoEnvVar = "APW_DEMO"
+
+func demoModeEnabled() -> Bool {
+  ProcessInfo.processInfo.environment[demoEnvVar] == "1"
+}
 protocol ApprovalPrompter {
   func prompt(url: String, username: String) -> Bool
 }
@@ -274,12 +283,23 @@ final class BrokerServer {
       )
     }
 
+    guard demoModeEnabled() else {
+      return ResponseEnvelope(
+        ok: false,
+        code: 3,
+        payload: nil,
+        error:
+          "no_credential_source: the AuthenticationServices broker is not yet wired. Set APW_DEMO=1 to use the bundled demo credential, or configure a fallback provider in ~/.apw/config.json.",
+        requestId: requestId
+      )
+    }
+
     guard host == "example.com" else {
       return ResponseEnvelope(
         ok: false,
         code: 3,
         payload: nil,
-        error: "The APW v2 bootstrap app currently supports only https://example.com.",
+        error: "The APW_DEMO bootstrap path supports only https://example.com.",
         requestId: requestId
       )
     }
@@ -325,7 +345,8 @@ final class BrokerServer {
   }
 
   private func supportedDomains() -> [String] {
-    (try? loadCredentials().domains) ?? ["example.com"]
+    guard demoModeEnabled() else { return [] }
+    return (try? loadCredentials().domains) ?? ["example.com"]
   }
 
   func loadCredentials() throws -> CredentialsFile {
@@ -346,7 +367,10 @@ final class BrokerServer {
     chmod(paths.runtimeRoot.path, runtimeDirectoryMode)
   }
 
-  private func ensureCredentialsFile() throws {
+  func ensureCredentialsFile() throws {
+    guard demoModeEnabled() else {
+      return
+    }
     guard !FileManager.default.fileExists(atPath: paths.credentialsPath.path) else {
       return
     }
@@ -366,8 +390,8 @@ final class BrokerServer {
     try data.write(to: paths.credentialsPath, options: [.atomic])
     chmod(paths.credentialsPath.path, statusFileMode)
     fputs(
-      "apw: info: created demo credentials file at \(paths.credentialsPath.path). "
-        + "This file contains placeholder credentials — replace them with real entries before use.\n",
+      "apw: warn: APW_DEMO=1 set; wrote placeholder credentials to \(paths.credentialsPath.path). "
+        + "Disable APW_DEMO before shipping.\n",
       stderr)
   }
 

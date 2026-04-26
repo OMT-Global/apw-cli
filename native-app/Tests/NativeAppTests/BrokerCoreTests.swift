@@ -137,6 +137,9 @@ final class BrokerCoreTests: XCTestCase {
     let paths = makePaths(root)
     try writeCredentials(at: paths.credentialsPath)
 
+    setenv("APW_DEMO", "1", 1)
+    defer { unsetenv("APW_DEMO") }
+
     let allowServer = makeServer(root: root, decision: true)
     let allowResponse = try allowServer.dispatch(request: RequestEnvelope(
       requestId: "allow",
@@ -153,6 +156,45 @@ final class BrokerCoreTests: XCTestCase {
     ))
     XCTAssertEqual(denyResponse.ok, false)
     XCTAssertEqual(denyResponse.error, "User denied the APW login request.")
+  }
+
+  func testLoginWithoutDemoEnvReturnsNoCredentialSource() throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let server = makeServer(root: root)
+
+    unsetenv("APW_DEMO")
+
+    let response = try server.dispatch(request: RequestEnvelope(
+      requestId: "no-demo",
+      command: "login",
+      payload: ["url": "https://example.com"]
+    ))
+    XCTAssertEqual(response.ok, false)
+    XCTAssertEqual(response.code, 3)
+    XCTAssertTrue(response.error?.contains("no_credential_source") ?? false,
+                  "expected typed no_credential_source error, got: \(response.error ?? "nil")")
+  }
+
+  func testEnsureCredentialsFileSkippedWithoutDemoEnv() throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: root, withIntermediateDirectories: true, attributes: nil)
+    let server = makeServer(root: root)
+
+    unsetenv("APW_DEMO")
+    try server.ensureCredentialsFile()
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: makePaths(root).credentialsPath.path),
+      "credentials.json must not be materialized without APW_DEMO=1")
+
+    setenv("APW_DEMO", "1", 1)
+    defer { unsetenv("APW_DEMO") }
+    try server.ensureCredentialsFile()
+    XCTAssertTrue(
+      FileManager.default.fileExists(atPath: makePaths(root).credentialsPath.path),
+      "credentials.json should exist after demo-gated bootstrap")
   }
 
   func testDoctorPayloadDoesNotAdvertiseAmbientAutoApproveEscapeHatch() throws {

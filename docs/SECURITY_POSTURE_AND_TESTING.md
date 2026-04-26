@@ -16,9 +16,25 @@ Release reference version: `v2.0.0`
 - config, status, and bootstrap credential files are written with mode `0600`
 - legacy session secret material is kept in the user keychain when the `v1.x`
   compatibility path is used
+- the plaintext demo credentials file (`~/.apw/native-app/credentials.json`) is
+  **never** materialized by default. Set `APW_DEMO=1` before `apw app install`
+  / `apw app launch` to opt into the bundled `example.com` bootstrap
+  credential. Without `APW_DEMO`, `apw login` returns
+  `no_credential_source` for the demo domain. (issue #14)
 - external CLI fallback is opt-in via `fallbackProvider` +
-  `fallbackProviderPath`, requires an absolute executable path, and does not
-  cache returned credentials
+  `fallbackProviderPath`, requires an absolute executable path that:
+  - is not `~`-prefixed
+  - resolves via `fs::canonicalize` (symlinks followed)
+  - is a regular file owned by the current effective uid
+  - has the execute bit set and is **not** world-writable
+  Validation failures surface as typed `InvalidConfig` errors. (issue #1)
+- external fallback exec is bounded:
+  - per-invocation wall-clock timeout `APW_FALLBACK_TIMEOUT_MS`
+    (default 15000)
+  - per-process invocation cap `APW_FALLBACK_INVOCATION_LIMIT` (default 5)
+  - Timeouts kill the child via `SIGKILL` and return
+    `CommunicationTimeout`; rate-limit breaches return a typed
+    `GenericError` without crashing. (issue #3)
 
 ### Runtime broker hardening
 

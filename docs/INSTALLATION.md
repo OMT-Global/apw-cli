@@ -107,6 +107,36 @@ Healthy v2 bootstrap state usually looks like:
 apw login https://example.com
 ```
 
+The default install does not materialize a demo credential. To exercise the
+bundled bootstrap credential for `https://example.com`, opt in explicitly:
+
+```bash
+APW_DEMO=1 apw app install
+APW_DEMO=1 apw app launch
+APW_DEMO=1 apw login https://example.com
+```
+
+Without `APW_DEMO=1`, `apw login` returns a typed `no_credential_source`
+error for the demo domain. The real
+`AuthenticationServices` broker is tracked in issue #13.
+
+### External fallback providers
+
+When a fallback provider is configured in `~/.apw/config.json`
+(`fallbackProvider` + `fallbackProviderPath`), the CLI validates the
+provider binary before each invocation:
+
+- the path must be absolute and must not start with `~`
+- the resolved file (after `realpath`) must be a regular file, owned by the
+  current user, with the execute bit set, and not world-writable
+
+Each invocation is bounded by:
+
+- `APW_FALLBACK_TIMEOUT_MS` (default 15000) — wall-clock timeout per exec;
+  the child is killed if it exceeds it
+- `APW_FALLBACK_INVOCATION_LIMIT` (default 5) — maximum invocations per
+  `apw` process before further calls are refused
+
 ## Diagnostics
 
 ### Machine-readable status

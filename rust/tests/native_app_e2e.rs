@@ -443,10 +443,23 @@ fn doctor_bootstraps_runtime_without_installed_bundle() {
         payload["payload"]["frameworks"]["authenticationServicesLinked"],
         true
     );
-    assert!(fixture
-        .home()
-        .join(".apw/native-app/credentials.json")
-        .exists());
+    assert!(
+        !fixture
+            .home()
+            .join(".apw/native-app/credentials.json")
+            .exists(),
+        "credentials.json must not be materialized without APW_DEMO=1 (issue #14)"
+    );
+
+    let demo_output = run_apw(&fixture, &["--json", "doctor"], &[("APW_DEMO", "1")]);
+    assert_eq!(demo_output.status, 0, "{demo_output:#?}");
+    assert!(
+        fixture
+            .home()
+            .join(".apw/native-app/credentials.json")
+            .exists(),
+        "credentials.json should be materialized when APW_DEMO=1 is set"
+    );
 }
 
 #[test]
