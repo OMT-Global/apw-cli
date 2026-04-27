@@ -17,6 +17,32 @@ private let credentialsFileName = "credentials.json"
 /// indefinitely on a hung peer. See issue #2.
 let brokerRequestTimeoutMs: Int = 3_000
 
+/// Map a `BrokerErrorCode` to the integer status code used in the wire
+/// envelope so the Rust CLI's typed `Status` enum stays stable. See
+/// issue #13.
+func brokerStatus(for code: BrokerErrorCode) -> Int {
+  switch code {
+  case .canceled, .failed, .unknown:
+    return 1  // GenericError
+  case .invalidResponse:
+    return 104  // ProtoInvalidResponse
+  case .notHandled, .unsupportedDomain, .noCredentialSource:
+    return 3  // NoResults
+  }
+}
+
+/// Factory for the default credential broker. Returns the
+/// AuthenticationServices implementation when the framework is
+/// available, otherwise nil so callers can fall back to demo or
+/// external providers. See issue #13.
+func defaultCredentialBroker() -> CredentialBroker? {
+  #if canImport(AuthenticationServices)
+    return AppleAuthenticationServicesBroker()
+  #else
+    return nil
+  #endif
+}
+
 /// Environment variable that opts the broker into the demo bootstrap path.
 /// When unset, the broker never materializes a plaintext credentials file
 /// and returns `no_credential_source` for login requests. See issue #14.
@@ -153,10 +179,16 @@ final class BrokerServer {
   private let paths: AppPaths
   private let startedAt = ISO8601DateFormatter().string(from: Date())
   private let approvalPrompter: ApprovalPrompter
+  private let credentialBroker: CredentialBroker?
 
-  init(paths: AppPaths, approvalPrompter: ApprovalPrompter = SystemApprovalPrompter()) {
+  init(
+    paths: AppPaths,
+    approvalPrompter: ApprovalPrompter = SystemApprovalPrompter(),
+    credentialBroker: CredentialBroker? = defaultCredentialBroker()
+  ) {
     self.paths = paths
     self.approvalPrompter = approvalPrompter
+    self.credentialBroker = credentialBroker
   }
 
   func run() throws -> Never {
@@ -300,15 +332,55 @@ final class BrokerServer {
       )
     }
 
-    guard demoModeEnabled() else {
-      return ResponseEnvelope(
-        ok: false,
-        code: 3,
-        payload: nil,
-        error:
-          "no_credential_source: the AuthenticationServices broker is not yet wired. Set APW_DEMO=1 to use the bundled demo credential, or configure a fallback provider in ~/.apw/config.json.",
-        requestId: requestId
-      )
+    // Non-demo path: route through the AuthenticationServices broker
+    // (issue #13). When no broker is wired (e.g. older macOS, missing
+    // entitlement) we surface a typed `no_credential_source` error so
+    // the CLI can fall back to an external provider.
+    if !demoModeEnabled() {
+      guard let broker = credentialBroker else {
+        return ResponseEnvelope(
+          ok: false,
+          code: 3,
+          payload: nil,
+          error:
+            "no_credential_source: the AuthenticationServices broker is not wired in this build. Set APW_DEMO=1 for the bootstrap path, or configure a fallback provider in ~/.apw/config.json.",
+          requestId: requestId
+        )
+      }
+      switch broker.login(url: rawURL) {
+      case .success(let credential):
+        return ResponseEnvelope(
+          ok: true,
+          code: 0,
+          payload: [
+            "status": AnyCodable("approved"),
+            "url": AnyCodable(credential.url),
+            "domain": AnyCodable(credential.domain),
+            "username": AnyCodable(credential.username),
+            "password": AnyCodable(credential.password),
+            "transport": AnyCodable("authentication_services"),
+            "userMediated": AnyCodable(true),
+          ],
+          error: nil,
+          requestId: requestId
+        )
+      case .denied:
+        return ResponseEnvelope(
+          ok: false,
+          code: 1,
+          payload: nil,
+          error: "User denied the APW login request.",
+          requestId: requestId
+        )
+      case .failure(let code, let message):
+        return ResponseEnvelope(
+          ok: false,
+          code: brokerStatus(for: code),
+          payload: nil,
+          error: "\(code.rawValue): \(message)",
+          requestId: requestId
+        )
+      }
     }
 
     guard host == "example.com" else {

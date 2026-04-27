@@ -11,6 +11,14 @@ private struct StubApprovalPrompter: ApprovalPrompter {
   }
 }
 
+private struct StubCredentialBroker: CredentialBroker {
+  let outcome: CredentialBrokerResult
+
+  func login(url: String) -> CredentialBrokerResult {
+    outcome
+  }
+}
+
 final class BrokerCoreTests: XCTestCase {
   private func makePaths(_ root: URL) -> AppPaths {
     AppPaths(
@@ -21,11 +29,20 @@ final class BrokerCoreTests: XCTestCase {
     )
   }
 
+  /// Test servers default to no `CredentialBroker` so they exercise the
+  /// `no_credential_source` path instead of triggering a real
+  /// `ASAuthorizationController` request during XCTest. Tests that
+  /// exercise the broker path inject a `StubCredentialBroker` explicitly.
   private func makeServer(
     root: URL,
-    decision: Bool = true
+    decision: Bool = true,
+    credentialBroker: CredentialBroker? = nil
   ) -> BrokerServer {
-    BrokerServer(paths: makePaths(root), approvalPrompter: StubApprovalPrompter(decision: decision))
+    BrokerServer(
+      paths: makePaths(root),
+      approvalPrompter: StubApprovalPrompter(decision: decision),
+      credentialBroker: credentialBroker
+    )
   }
 
   private func writeCredentials(
@@ -207,5 +224,106 @@ final class BrokerCoreTests: XCTestCase {
 
     XCTAssertNotNil(guidance)
     XCTAssertFalse(guidance?.contains(where: { $0.contains("APW_NATIVE_APP_AUTO_APPROVE") }) ?? true)
+  }
+
+  // MARK: - AuthenticationServices broker routing (issue #13)
+
+  func testLoginRoutesToCredentialBrokerOnSuccess() throws {
+    unsetenv("APW_DEMO")
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let broker = StubCredentialBroker(
+      outcome: .success(
+        BrokerCredential(
+          domain: "vault.example.com",
+          url: "https://vault.example.com",
+          username: "alice@example.com",
+          password: "real-keychain-password"
+        )))
+    let server = makeServer(root: root, credentialBroker: broker)
+
+    let response = try server.dispatch(
+      request: RequestEnvelope(
+        requestId: "ok",
+        command: "login",
+        payload: ["url": "https://vault.example.com"]
+      ))
+
+    XCTAssertEqual(response.ok, true)
+    XCTAssertEqual(response.code, 0)
+    XCTAssertEqual(response.payload?["transport"]?.value as? String, "authentication_services")
+    XCTAssertEqual(response.payload?["username"]?.value as? String, "alice@example.com")
+    XCTAssertEqual(response.payload?["domain"]?.value as? String, "vault.example.com")
+    XCTAssertEqual(response.payload?["userMediated"]?.value as? Bool, true)
+  }
+
+  func testLoginRoutesToCredentialBrokerOnDeny() throws {
+    unsetenv("APW_DEMO")
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let broker = StubCredentialBroker(outcome: .denied)
+    let server = makeServer(root: root, credentialBroker: broker)
+
+    let response = try server.dispatch(
+      request: RequestEnvelope(
+        requestId: "denied",
+        command: "login",
+        payload: ["url": "https://vault.example.com"]
+      ))
+
+    XCTAssertEqual(response.ok, false)
+    XCTAssertEqual(response.code, 1)
+    XCTAssertEqual(response.error, "User denied the APW login request.")
+  }
+
+  func testLoginRoutesToCredentialBrokerOnCanceled() throws {
+    unsetenv("APW_DEMO")
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let broker = StubCredentialBroker(
+      outcome: .failure(.canceled, "ASAuthorizationError canceled"))
+    let server = makeServer(root: root, credentialBroker: broker)
+
+    let response = try server.dispatch(
+      request: RequestEnvelope(
+        requestId: "cancel",
+        command: "login",
+        payload: ["url": "https://vault.example.com"]
+      ))
+
+    XCTAssertEqual(response.ok, false)
+    XCTAssertEqual(response.code, 1)
+    XCTAssertTrue(response.error?.contains("canceled") ?? false)
+  }
+
+  func testLoginRoutesToCredentialBrokerOnInvalidResponse() throws {
+    unsetenv("APW_DEMO")
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let broker = StubCredentialBroker(
+      outcome: .failure(.invalidResponse, "ASAuthorizationError invalidResponse"))
+    let server = makeServer(root: root, credentialBroker: broker)
+
+    let response = try server.dispatch(
+      request: RequestEnvelope(
+        requestId: "invalid",
+        command: "login",
+        payload: ["url": "https://vault.example.com"]
+      ))
+
+    XCTAssertEqual(response.ok, false)
+    // invalidResponse maps to ProtoInvalidResponse (104) in the Rust enum.
+    XCTAssertEqual(response.code, 104)
+    XCTAssertTrue(response.error?.contains("invalidResponse") ?? false)
+  }
+
+  func testBrokerStatusMappingCoversAllErrorCodes() {
+    XCTAssertEqual(brokerStatus(for: .canceled), 1)
+    XCTAssertEqual(brokerStatus(for: .failed), 1)
+    XCTAssertEqual(brokerStatus(for: .unknown), 1)
+    XCTAssertEqual(brokerStatus(for: .invalidResponse), 104)
+    XCTAssertEqual(brokerStatus(for: .notHandled), 3)
+    XCTAssertEqual(brokerStatus(for: .unsupportedDomain), 3)
+    XCTAssertEqual(brokerStatus(for: .noCredentialSource), 3)
   }
 }

@@ -205,6 +205,31 @@ Deliverables:
 - end-to-end sign-in flow for one associated domain
 - stable error mapping for cancel, denial, timeout, and unsupported-domain cases
 
+#### Phase 3 status (issue #13)
+
+- `native-app/Sources/NativeAppLib/AuthenticationServicesBroker.swift`
+  introduces a `CredentialBroker` protocol, the
+  `AppleAuthenticationServicesBroker` implementation that drives
+  `ASAuthorizationController` + `ASAuthorizationPasswordRequest` on the
+  main thread and bridges results back to the worker thread via
+  `DispatchSemaphore`, and a stable `BrokerErrorCode` mapping
+  (`canceled` / `failed` / `invalidResponse` / `notHandled` / `unknown`).
+- `BrokerCore.loginResponse` routes through the injected broker when
+  `APW_DEMO` is unset, mapping outcomes onto the existing wire envelope
+  (`transport: "authentication_services"`, `userMediated: true`, integer
+  status codes that match the Rust `Status` enum).
+- `BrokerCoreTests` exercises the broker outcome paths via
+  `StubCredentialBroker` for `success` / `denied` / `canceled` /
+  `invalidResponse`, and asserts the broker error code mapping.
+
+**Phase 3 exit blockers still open**:
+
+- The integration is unverified against a notarized build with
+  associated-domain entitlements wired (the macOS build cannot be
+  exercised from CI on Linux). A follow-up validation pass on a real
+  macOS host is required before declaring Phase 3 complete.
+- Domain expansion beyond `example.com` is tracked in issue #8.
+
 ### Phase 4: command migration and deprecation
 
 - Add compatibility warnings to `pw` and `otp`

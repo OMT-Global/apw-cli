@@ -87,12 +87,27 @@ The supported `v2.0.0` bootstrap flow is app-first:
 apw app install
 apw app launch
 apw doctor --json
-apw login https://example.com
+apw login https://vault.example.com
 ```
 
-The current bootstrap domain is `https://example.com`. The APW app uses a
-same-user local broker socket and explicit approval UI for the returned
-credential flow.
+In a notarized build with associated-domain entitlements wired,
+`apw login` routes through the
+[`AuthenticationServicesBroker`](native-app/Sources/NativeAppLib/AuthenticationServicesBroker.swift)
+and returns an iCloud Keychain credential surfaced via the Apple
+credential picker (issue #13).
+
+A separate **demo bootstrap path** is available for first-run
+validation. Setting `APW_DEMO=1` makes the broker materialize and
+return the bundled placeholder credential for `https://example.com` —
+nothing else. Without `APW_DEMO=1`, the demo path returns a typed
+`no_credential_source` error rather than silently falling back to a
+plaintext file (issue #14):
+
+```bash
+APW_DEMO=1 apw app install
+APW_DEMO=1 apw app launch
+APW_DEMO=1 apw login https://example.com
+```
 
 Optional reduced-security mode for external password managers can be configured
 in `~/.apw/config.json` with an absolute provider path:
