@@ -1,5 +1,17 @@
     # Bootstrap Onboarding
 
+    ## Local environment check
+
+    - Run `apw doctor` from a fresh checkout — the first-step diagnostic for new
+      contributors. It probes `xcodebuild`, `rustc`, `detect-secrets`, the
+      Apple `Developer ID Application` keychain identity, and the APW.app
+      bundle install state, and prints a `[OK]/[WARN]/[FAIL]` line per check
+      with a remediation hint.
+    - For CI consumers and runner inventory work, `apw doctor --ci` emits the
+      same checks as a structured JSON array (also honors the global `--json`
+      flag). When `CI=true`, set `RUNNER_LABELS` so the doctor can sanity-check
+      the runner pool selection (issue #12).
+
     ## Repo Governance
 
     - Confirm the repository exists at `OMT-Global/apw-cli`.

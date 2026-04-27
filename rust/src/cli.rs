@@ -252,7 +252,13 @@ pub enum AppSubcommand {
 }
 
 #[derive(Args, Default)]
-pub struct DoctorCommand {}
+pub struct DoctorCommand {
+    /// Emit only the structured environment-check array. Useful for CI
+    /// jobs that want to grep `[FAIL]` lines or parse the JSON shape.
+    /// See issue #12.
+    #[arg(long)]
+    pub ci: bool,
+}
 
 #[derive(Args)]
 pub struct LoginCommand {
@@ -411,9 +417,31 @@ fn run_app(args: AppCommand, cli_json: bool) -> Result<(), APWError> {
     Ok(())
 }
 
-fn run_doctor(_args: DoctorCommand, cli_json: bool) -> Result<(), APWError> {
+fn run_doctor(args: DoctorCommand, cli_json: bool) -> Result<(), APWError> {
     logging::info("doctor", "collecting native app diagnostics");
-    let payload = native_app_doctor()?;
+    let environment = crate::doctor::run_environment_checks();
+    let environment_json = crate::doctor::checks_to_json(&environment);
+
+    if args.ci {
+        // CI mode always emits the structured envelope so downstream
+        // tooling can parse `[FAIL]` deterministically.
+        print_output(&environment_json, Status::Success, true);
+        return Ok(());
+    }
+
+    let mut payload = native_app_doctor()?;
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("environment".to_string(), environment_json);
+    }
+
+    if !cli_json {
+        // Surface the human-readable check lines on stderr so the
+        // existing JSON-on-stdout payload stays parseable.
+        for line in crate::doctor::render_check_lines(&environment) {
+            eprintln!("{line}");
+        }
+    }
+
     print_output(&payload, Status::Success, cli_json);
     Ok(())
 }
