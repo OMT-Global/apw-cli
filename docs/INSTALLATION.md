@@ -45,6 +45,29 @@ cargo install --path rust --locked
 apw app install
 ```
 
+## Notarization
+
+When the release CI is fully wired with Apple credentials (issue #7),
+release tag builds:
+
+1. Sign the `.app` bundle with the configured Developer ID Application
+   certificate.
+2. Submit the signed bundle to Apple Notary Service via
+   `xcrun notarytool submit --wait`.
+3. Staple the notarization ticket to the bundle.
+4. Re-zip the stapled bundle and upload it as the GitHub Release asset
+   `APW-<tag>.zip` alongside the source tarball.
+
+When the required secrets are not configured, the workflow emits a
+`::warning::` and skips notarization. End users that hit Gatekeeper
+quarantine on an unnotarized build can run:
+
+```bash
+xattr -d com.apple.quarantine /Applications/APW.app
+```
+
+This manual fallback is interim until issue #7 is fully landed.
+
 ## Homebrew
 
 ### Local formula smoke test
@@ -67,7 +90,19 @@ This validates:
 ### Publish your own tap
 
 Use [`packaging/homebrew/apw.rb`](../packaging/homebrew/apw.rb)
-as the formula template.
+as the formula template, or render a release-pinned formula with the
+helper script:
+
+```bash
+./scripts/render-homebrew-formula.sh \
+  2.0.1 \
+  "$(curl -fsSL https://github.com/OMT-Global/apw/archive/refs/tags/v2.0.1.tar.gz | shasum -a 256 | awk '{print $1}')" \
+  > Formula/apw.rb
+```
+
+The release workflow renders this automatically and opens a PR against
+the tap repository when `HOMEBREW_TAP_TOKEN` is set. Failures in the
+tap step do not block the release itself — see issue #6.
 
 After installing with Homebrew, install the per-user APW app bundle:
 

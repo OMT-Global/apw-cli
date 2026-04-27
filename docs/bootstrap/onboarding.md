@@ -37,6 +37,25 @@
     - Run `scripts/bump-version.sh <version>` from the repository root to update all version-bearing release surfaces.
     - Run `bash scripts/ci/run-fast-checks.sh` after version bumps before opening a release PR.
 
+    ### Release secrets
+
+    The following repository secrets are consumed by `.github/workflows/release.yml`:
+
+    | Secret                       | Purpose                                                       |
+    | ---------------------------- | ------------------------------------------------------------- |
+    | `APPLE_DEVELOPER_CERT_P12`   | base64-encoded Developer ID Application .p12 (issue #7)        |
+    | `APPLE_CERT_PASSWORD`        | passphrase for the .p12 above                                  |
+    | `APPLE_TEAM_ID`              | 10-character Apple Developer Team ID                           |
+    | `APPLE_NOTARY_KEY_ID`        | App Store Connect API key id used by `notarytool`              |
+    | `APPLE_NOTARY_KEY_ISSUER`    | App Store Connect issuer UUID                                  |
+    | `APPLE_NOTARY_PRIVATE_KEY`   | base64-encoded `.p8` private key for `notarytool`              |
+    | `HOMEBREW_TAP_TOKEN`         | scoped `contents:write` token on the tap repo (issue #6)       |
+
+    All Apple credentials are optional — when absent, the workflow emits
+    a `::warning::` and continues without notarization. The Homebrew tap
+    job is `continue-on-error` so a missing or rejected token does not
+    block the release.
+
     ## Home Profiles
 
     - Run `project-bootstrap apply home --manifest ./project.bootstrap.yaml` after reviewing the bundled profile content.

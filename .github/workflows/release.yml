@@ -12,6 +12,16 @@ permissions:
 jobs:
   release:
     runs-on: ['self-hosted', 'private', 'macOS', 'ARM64', 'xcode']
+    # Apple credentials are exposed at the job level so the per-step
+    # `if:` can detect their presence without leaking values. See
+    # issue #7.
+    env:
+      APPLE_DEVELOPER_CERT_P12: ${{ secrets.APPLE_DEVELOPER_CERT_P12 }}
+      APPLE_CERT_PASSWORD:      ${{ secrets.APPLE_CERT_PASSWORD }}
+      APPLE_TEAM_ID:            ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_NOTARY_KEY_ID:      ${{ secrets.APPLE_NOTARY_KEY_ID }}
+      APPLE_NOTARY_KEY_ISSUER:  ${{ secrets.APPLE_NOTARY_KEY_ISSUER }}
+      APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -138,7 +148,162 @@ jobs:
           cp rust/target/release/apw dist/apw
           tar -czf dist/apw-macos-${GITHUB_REF_NAME}.tar.gz -C dist apw
 
+      # Notarization (issue #7). Skipped on non-tag builds and when the
+      # required Apple credentials are absent so the release stays
+      # unblocked while operators are still wiring secrets. When
+      # secrets are present, the .app bundle is signed with the
+      # Developer ID Application certificate, submitted to Apple's
+      # Notary Service, stapled, and re-zipped as the release asset.
+      - name: Apple notarize APW.app
+        if: |
+          startsWith(github.ref, 'refs/tags/v')
+          && env.APPLE_DEVELOPER_CERT_P12 != ''
+          && env.APPLE_NOTARY_PRIVATE_KEY != ''
+        run: |
+          set -euo pipefail
+          bundle="native-app/dist/APW.app"
+          if [[ ! -d "$bundle" ]]; then
+            echo "::error ::APW.app bundle missing at $bundle; build it before notarizing."
+            exit 1
+          fi
+
+          # Import the Developer ID Application certificate into a
+          # short-lived keychain so concurrent runners do not collide on
+          # the login keychain.
+          keychain="apw-release.keychain"
+          security create-keychain -p ci-temp-pass "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p ci-temp-pass "$keychain"
+          echo "$APPLE_DEVELOPER_CERT_P12" | base64 --decode > /tmp/apw-cert.p12
+          security import /tmp/apw-cert.p12 \
+            -k "$keychain" \
+            -P "$APPLE_CERT_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k ci-temp-pass "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+
+          identity="Developer ID Application: ${APPLE_TEAM_ID}"
+          codesign --force --options runtime --timestamp \
+            --sign "$identity" "$bundle"
+
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$bundle" "/tmp/APW-${GITHUB_REF_NAME}.zip"
+
+          # Submit to Apple Notary Service. The private key arrives as a
+          # base64 blob and is materialized to a temp file expected by
+          # notarytool.
+          echo "$APPLE_NOTARY_PRIVATE_KEY" | base64 --decode > /tmp/apw-notary.p8
+          xcrun notarytool submit "/tmp/APW-${GITHUB_REF_NAME}.zip" \
+            --key /tmp/apw-notary.p8 \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_KEY_ISSUER" \
+            --wait
+
+          xcrun stapler staple "$bundle"
+
+          # Re-zip the stapled bundle for upload.
+          rm -f "/tmp/APW-${GITHUB_REF_NAME}.zip"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$bundle" "dist/APW-${GITHUB_REF_NAME}.zip"
+
+          # Best-effort cleanup so a follow-up job on the same runner
+          # does not inherit the temp keychain.
+          security delete-keychain "$keychain" || true
+          rm -f /tmp/apw-cert.p12 /tmp/apw-notary.p8
+
+      - name: Note when notarization secrets are absent
+        if: |
+          startsWith(github.ref, 'refs/tags/v')
+          && (env.APPLE_DEVELOPER_CERT_P12 == '' || env.APPLE_NOTARY_PRIVATE_KEY == '')
+        run: |
+          echo "::warning ::Notarization skipped — APPLE_DEVELOPER_CERT_P12 and/or APPLE_NOTARY_PRIVATE_KEY not configured. End users will hit Gatekeeper quarantine. See docs/INSTALLATION.md."
+
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/apw-macos-${{ github.ref_name }}.tar.gz
+          # Notarized .app zip is uploaded when present; the tarball is
+          # always present.
+          files: |
+            dist/apw-macos-${{ github.ref_name }}.tar.gz
+            dist/APW-${{ github.ref_name }}.zip
+          fail_on_unmatched_files: false
+
+  homebrew-tap:
+    # Render the Homebrew formula for the freshly-published tarball and
+    # open a PR in the tap repo. Failure here must NOT block the release
+    # itself — operators can still re-run the render script by hand. See
+    # issue #6.
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Resolve release version
+        id: version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Download release tarball
+        run: |
+          url="${{ github.server_url }}/${{ github.repository }}/archive/refs/tags/${{ github.ref_name }}.tar.gz"
+          curl -fsSL -o /tmp/apw-source.tar.gz "$url"
+          sha256="$(shasum -a 256 /tmp/apw-source.tar.gz | awk '{print $1}')"
+          echo "APW_RELEASE_SHA256=$sha256" >> "$GITHUB_ENV"
+
+      - name: Render Homebrew formula
+        run: |
+          ./scripts/render-homebrew-formula.sh \
+            "${{ steps.version.outputs.value }}" \
+            "$APW_RELEASE_SHA256" \
+            > /tmp/apw.rb
+          echo "--- rendered formula ---"
+          cat /tmp/apw.rb
+
+      - name: Open PR against tap repo
+        if: env.HOMEBREW_TAP_TOKEN != ''
+        env:
+          TAP_REPO: omt-global/homebrew-apw
+          TAP_BRANCH: release/v${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          workdir="$(mktemp -d)"
+          git clone --depth=1 \
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${TAP_REPO}.git" \
+            "$workdir"
+          cd "$workdir"
+          git config user.email "release-bot@omt.dev"
+          git config user.name  "apw-release-bot"
+          git checkout -b "$TAP_BRANCH"
+          mkdir -p Formula
+          cp /tmp/apw.rb Formula/apw.rb
+          git add Formula/apw.rb
+          git commit -m "apw ${{ steps.version.outputs.value }}"
+          git push -u origin "$TAP_BRANCH"
+          curl -fsS \
+            -X POST \
+            -H "Authorization: Bearer ${HOMEBREW_TAP_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${TAP_REPO}/pulls" \
+            -d @- <<JSON
+          {
+            "title": "apw ${{ steps.version.outputs.value }}",
+            "head":  "${TAP_BRANCH}",
+            "base":  "main",
+            "body":  "Automated formula update for apw ${{ steps.version.outputs.value }}. Render command: scripts/render-homebrew-formula.sh ${{ steps.version.outputs.value }} <sha256>."
+          }
+          JSON
+
+      - name: Note when tap token is unavailable
+        if: env.HOMEBREW_TAP_TOKEN == ''
+        run: |
+          echo "::warning ::HOMEBREW_TAP_TOKEN not configured; skipping tap PR. Render the formula manually with scripts/render-homebrew-formula.sh."
