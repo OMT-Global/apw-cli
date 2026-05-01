@@ -15,6 +15,7 @@
 
     ## Runner Policy
 
+    - Run `apw --json doctor` first on a new local checkout or self-hosted runner to confirm the Rust, Xcode, secret-scan, signing, and runner-environment diagnostics before extended validation.
     - Shell-safe jobs may use `[self-hosted, synology, shell-only, public]`.
     - Docker, service-container, browser, and `container:` workloads stay on GitHub-hosted runners.
     - Keep PR checks cheap. Add heavy validation to `scripts/ci/run-extended-validation.sh` instead of the PR lane.
