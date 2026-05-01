@@ -144,6 +144,7 @@ final class BrokerCoreTests: XCTestCase {
       payload: ["url": "https://example.com"]
     ))
     XCTAssertEqual(allowResponse.ok, true)
+    XCTAssertEqual(allowResponse.payload?["intent"]?.value as? String, "login")
 
     let denyServer = makeServer(root: root, decision: false)
     let denyResponse = try denyServer.dispatch(request: RequestEnvelope(
@@ -153,6 +154,42 @@ final class BrokerCoreTests: XCTestCase {
     ))
     XCTAssertEqual(denyResponse.ok, false)
     XCTAssertEqual(denyResponse.error, "User denied the APW login request.")
+  }
+
+  func testFillDispatchUsesFillIntent() throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let paths = makePaths(root)
+    try writeCredentials(at: paths.credentialsPath)
+
+    let server = makeServer(root: root, decision: true)
+    let response = try server.dispatch(request: RequestEnvelope(
+      requestId: "fill",
+      command: "fill",
+      payload: ["url": "https://example.com"]
+    ))
+
+    XCTAssertEqual(response.ok, true)
+    XCTAssertEqual(response.payload?["intent"]?.value as? String, "fill")
+    XCTAssertEqual(response.payload?["domain"]?.value as? String, "example.com")
+  }
+
+  func testCredentialRequestsRejectNonHttpsUrls() throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let paths = makePaths(root)
+    try writeCredentials(at: paths.credentialsPath)
+
+    let server = makeServer(root: root, decision: true)
+    for command in ["login", "fill"] {
+      let response = try server.dispatch(request: RequestEnvelope(
+        requestId: command,
+        command: command,
+        payload: ["url": "ftp://example.com"]
+      ))
+      XCTAssertEqual(response.ok, false)
+      XCTAssertEqual(response.error, "Native app credential requests require https URLs.")
+    }
   }
 
   func testDoctorPayloadDoesNotAdvertiseAmbientAutoApproveEscapeHatch() throws {

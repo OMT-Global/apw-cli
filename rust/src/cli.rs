@@ -90,6 +90,23 @@ fn sanitize_url(raw: &str) -> Result<String, APWError> {
     Ok(candidate)
 }
 
+fn sanitize_native_credential_url(raw: &str) -> Result<String, APWError> {
+    let candidate = sanitize_url(raw)?;
+    let parsed = url::Url::parse(&candidate).map_err(|_| {
+        APWError::new(
+            Status::InvalidParam,
+            format!("Invalid native credential URL: '{candidate}'"),
+        )
+    })?;
+    if parsed.scheme() != "https" {
+        return Err(APWError::new(
+            Status::InvalidParam,
+            "Native credential requests require an https URL.",
+        ));
+    }
+    Ok(candidate)
+}
+
 fn print_output(payload: &serde_json::Value, status: Status, json_output: bool) {
     if json_output {
         println!(
@@ -411,14 +428,14 @@ fn run_fill(args: FillCommand, cli_json: bool) -> Result<(), APWError> {
         "fill",
         format!("requesting fill credential for {}", args.url),
     );
-    let payload = native_app_fill(&sanitize_url(&args.url)?)?;
+    let payload = native_app_fill(&sanitize_native_credential_url(&args.url)?)?;
     print_output(&payload, Status::Success, cli_json);
     Ok(())
 }
 
 fn run_login(args: LoginCommand, cli_json: bool) -> Result<(), APWError> {
     logging::info("login", format!("requesting credential for {}", args.url));
-    let payload = native_app_login(&sanitize_url(&args.url)?)?;
+    let payload = native_app_login(&sanitize_native_credential_url(&args.url)?)?;
     print_output(&payload, Status::Success, cli_json);
     Ok(())
 }
@@ -729,6 +746,20 @@ mod tests {
     fn parse_url_is_optional_https_default() {
         assert_eq!(sanitize_url("example.com").unwrap(), "https://example.com");
         assert!(sanitize_url("not a url").is_err());
+    }
+
+    #[test]
+    fn native_credential_urls_must_be_https() {
+        assert_eq!(
+            sanitize_native_credential_url("example.com").unwrap(),
+            "https://example.com"
+        );
+        assert_eq!(
+            sanitize_native_credential_url("https://example.com/login").unwrap(),
+            "https://example.com/login"
+        );
+        assert!(sanitize_native_credential_url("http://example.com").is_err());
+        assert!(sanitize_native_credential_url("ftp://example.com").is_err());
     }
 
     #[test]

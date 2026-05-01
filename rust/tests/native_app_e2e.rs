@@ -94,7 +94,13 @@ def login_payload(raw_url, transport):
         return {
             "ok": False,
             "code": 1,
-            "error": "Invalid URL for native app login.",
+            "error": "Invalid URL for native app credential request.",
+        }
+    if parsed.scheme.lower() != "https":
+        return {
+            "ok": False,
+            "code": 1,
+            "error": "Native app credential requests require https URLs.",
         }
     if host != "example.com":
         return {
@@ -604,6 +610,25 @@ fn login_reports_operator_facing_failures() {
         .as_str()
         .unwrap_or_default()
         .contains("User denied"));
+}
+
+#[test]
+#[serial]
+fn native_credential_commands_reject_non_https_urls() {
+    let fixture = NativeAppFixture::new();
+
+    let install = run_apw(&fixture, &["--json", "app", "install"], &[]);
+    assert_eq!(install.status, 0, "{install:#?}");
+
+    for command in ["login", "fill"] {
+        let result = run_apw(&fixture, &["--json", command, "ftp://example.com"], &[]);
+        assert_eq!(result.status, 2, "{result:#?}");
+        let payload = parse_error(&result);
+        assert!(payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("require an https URL"));
+    }
 }
 
 #[test]
