@@ -224,7 +224,10 @@ final class BrokerServer {
       )
     case "login":
       let url = request.payload?["url"] ?? ""
-      return try loginResponse(for: url, requestId: request.requestId)
+      return try credentialResponse(for: url, intent: "login", requestId: request.requestId)
+    case "fill":
+      let url = request.payload?["url"] ?? ""
+      return try credentialResponse(for: url, intent: "fill", requestId: request.requestId)
     default:
       return ResponseEnvelope(
         ok: false,
@@ -263,13 +266,27 @@ final class BrokerServer {
     ]
   }
 
-  private func loginResponse(for rawURL: String, requestId: String?) throws -> ResponseEnvelope {
+  private func credentialResponse(
+    for rawURL: String,
+    intent: String,
+    requestId: String?
+  ) throws -> ResponseEnvelope {
     guard let url = URL(string: rawURL), let host = url.host?.lowercased(), !host.isEmpty else {
       return ResponseEnvelope(
         ok: false,
         code: 1,
         payload: nil,
-        error: "Invalid URL for native app login.",
+        error: "Invalid URL for native app credential request.",
+        requestId: requestId
+      )
+    }
+
+    guard url.scheme?.lowercased() == "https" else {
+      return ResponseEnvelope(
+        ok: false,
+        code: 1,
+        payload: nil,
+        error: "Native app credential requests require https URLs.",
         requestId: requestId
       )
     }
@@ -312,6 +329,7 @@ final class BrokerServer {
       code: 0,
       payload: [
         "status": AnyCodable("approved"),
+        "intent": AnyCodable(intent),
         "url": AnyCodable(credential.url),
         "domain": AnyCodable(credential.domain),
         "username": AnyCodable(credential.username),
