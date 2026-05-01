@@ -15,6 +15,8 @@ use rpassword::prompt_password;
 use serde_json::json;
 use std::io::{self, Write};
 
+const LEGACY_DAEMON_DEPRECATION_WARNING: &str = "This command uses the legacy daemon path and will be removed in v2.1.0. Use the native app broker flow instead; see docs/MIGRATION_AND_PARITY.md.";
+
 fn read_prompt(prompt: &str) -> Result<String, APWError> {
     print!("{prompt}");
     io::stdout().flush().map_err(|error| {
@@ -171,6 +173,10 @@ fn print_status(payload: serde_json::Value, json_output: bool) {
     print_output(&payload, Status::Success, json_output);
 }
 
+fn warn_legacy_daemon_path(command: &str) {
+    logging::warn(command, LEGACY_DAEMON_DEPRECATION_WARNING);
+}
+
 fn parse_pin_prompt(optional: Option<String>) -> Result<String, APWError> {
     if let Some(pin) = optional {
         return normalize_pin(pin);
@@ -227,13 +233,25 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     App(AppCommand),
+    #[command(
+        long_about = "This command uses the legacy daemon path and will be removed in v2.1.0. Use the native app broker flow instead; see docs/MIGRATION_AND_PARITY.md."
+    )]
     Auth(AuthCommand),
     Doctor(DoctorCommand),
     Fill(FillCommand),
     Host(HostCommand),
     Login(LoginCommand),
+    #[command(
+        long_about = "This command uses the legacy daemon path and will be removed in v2.1.0. Use `apw login <url>` through the native app broker instead; see docs/MIGRATION_AND_PARITY.md."
+    )]
     Pw(PwCommand),
+    #[command(
+        long_about = "This command uses the legacy daemon path and will be removed in v2.1.0. OTP parity is retained only for migration; see docs/MIGRATION_AND_PARITY.md."
+    )]
     Otp(OtpCommand),
+    #[command(
+        long_about = "This command starts the legacy daemon path and will be removed in v2.1.0. Use `apw app launch` for the native app broker instead; see docs/MIGRATION_AND_PARITY.md."
+    )]
     Start(StartCommand),
     Status(StatusCommand),
     Version(VersionCommand),
@@ -453,6 +471,7 @@ fn run_auth(
     args: AuthCommand,
     cli_json: bool,
 ) -> Result<(), APWError> {
+    warn_legacy_daemon_path("auth");
     let result = match args.command {
         Some(AuthSubcommand::Logout) => {
             manager.logout()?;
@@ -513,6 +532,7 @@ fn run_pw(
     args: PwCommand,
     cli_json: bool,
 ) -> Result<(), APWError> {
+    warn_legacy_daemon_path("pw");
     match args.action {
         Some(PwAction::Get { url, username }) => {
             let payload = manager.get_password_for_url(
@@ -548,6 +568,7 @@ fn run_otp(
     args: OtpCommand,
     cli_json: bool,
 ) -> Result<(), APWError> {
+    warn_legacy_daemon_path("otp");
     match args.action {
         Some(OtpAction::Get { url }) => {
             let payload = manager.get_otp_for_url(&sanitize_url(&url)?)?;
@@ -575,6 +596,7 @@ fn run_otp(
 }
 
 async fn run_start(args: StartCommand) -> Result<(), APWError> {
+    warn_legacy_daemon_path("start");
     logging::info(
         "daemon",
         format!("starting daemon on {}:{}", args.bind, args.port),
@@ -699,7 +721,7 @@ fn parse_runtime_mode(raw: &str) -> std::result::Result<RuntimeMode, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
     use rand::{thread_rng, Rng};
 
     #[test]
@@ -742,6 +764,20 @@ mod tests {
     fn fill_subcommand_is_parsed() {
         let cli = Cli::parse_from(["apw", "fill", "example.com"]);
         assert!(matches!(cli.command, Commands::Fill(_)));
+    }
+
+    #[test]
+    fn legacy_daemon_help_mentions_deprecation() {
+        let mut command = Cli::command();
+        for name in ["auth", "pw", "otp", "start"] {
+            let help = command
+                .find_subcommand_mut(name)
+                .expect("legacy subcommand")
+                .render_long_help()
+                .to_string();
+            assert!(help.contains("legacy daemon path"), "{name} help: {help}");
+            assert!(help.contains("v2.1.0"), "{name} help: {help}");
+        }
     }
 
     #[test]
