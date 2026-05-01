@@ -156,22 +156,28 @@ final class BrokerCoreTests: XCTestCase {
     XCTAssertEqual(denyResponse.error, "User denied the APW login request.")
   }
 
-  func testFillDispatchUsesFillIntent() throws {
+  func testFillDispatchUsesRealBrokerCredentialPathWithFillIntent() throws {
     let root = URL(fileURLWithPath: NSTemporaryDirectory())
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
     let paths = makePaths(root)
     try writeCredentials(at: paths.credentialsPath)
 
-    let server = makeServer(root: root, decision: true)
-    let response = try server.dispatch(request: RequestEnvelope(
-      requestId: "fill",
+    let response = try makeServer(root: root, decision: true).dispatch(request: RequestEnvelope(
+      requestId: "fill-1",
       command: "fill",
       payload: ["url": "https://example.com"]
     ))
 
     XCTAssertEqual(response.ok, true)
+    XCTAssertEqual(response.code, 0)
+    XCTAssertEqual(response.requestId, "fill-1")
+    XCTAssertEqual(response.payload?["status"]?.value as? String, "approved")
     XCTAssertEqual(response.payload?["intent"]?.value as? String, "fill")
     XCTAssertEqual(response.payload?["domain"]?.value as? String, "example.com")
+    XCTAssertEqual(response.payload?["username"]?.value as? String, "demo@example.com")
+    XCTAssertEqual(response.payload?["password"]?.value as? String, "apw-demo-password")
+    XCTAssertEqual(response.payload?["transport"]?.value as? String, "unix_socket")
+    XCTAssertEqual(response.payload?["userMediated"]?.value as? Bool, true)
   }
 
   func testCredentialRequestsRejectNonHttpsUrls() throws {
@@ -183,15 +189,55 @@ final class BrokerCoreTests: XCTestCase {
     let server = makeServer(root: root, decision: true)
     for command in ["login", "fill"] {
       let response = try server.dispatch(request: RequestEnvelope(
-        requestId: command,
+        requestId: "\(command)-non-https",
         command: command,
         payload: ["url": "ftp://example.com"]
       ))
-      XCTAssertEqual(response.ok, false)
-      XCTAssertEqual(response.error, "Native app credential requests require https URLs.")
+      XCTAssertEqual(response.ok, false, command)
+      XCTAssertEqual(response.code, 1, command)
+      XCTAssertEqual(response.error, "Native app credential requests require https URLs.", command)
     }
   }
 
+  func testFillInvalidUnsupportedAndDeniedBehaviorMatchesLogin() throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let paths = makePaths(root)
+    try writeCredentials(at: paths.credentialsPath)
+
+    for command in ["login", "fill"] {
+      let invalid = try makeServer(root: root).dispatch(request: RequestEnvelope(
+        requestId: "\(command)-invalid",
+        command: command,
+        payload: ["url": "not-a-url"]
+      ))
+      XCTAssertEqual(invalid.ok, false, command)
+      XCTAssertEqual(invalid.code, 1, command)
+      XCTAssertEqual(invalid.error, "Invalid URL for native app credential request.", command)
+
+      let unsupported = try makeServer(root: root).dispatch(request: RequestEnvelope(
+        requestId: "\(command)-unsupported",
+        command: command,
+        payload: ["url": "https://unsupported.example"]
+      ))
+      XCTAssertEqual(unsupported.ok, false, command)
+      XCTAssertEqual(unsupported.code, 3, command)
+      XCTAssertEqual(
+        unsupported.error,
+        "The APW v2 bootstrap app currently supports only https://example.com.",
+        command
+      )
+
+      let denied = try makeServer(root: root, decision: false).dispatch(request: RequestEnvelope(
+        requestId: "\(command)-denied",
+        command: command,
+        payload: ["url": "https://example.com"]
+      ))
+      XCTAssertEqual(denied.ok, false, command)
+      XCTAssertEqual(denied.code, 1, command)
+      XCTAssertEqual(denied.error, "User denied the APW login request.", command)
+    }
+  }
   func testDoctorPayloadDoesNotAdvertiseAmbientAutoApproveEscapeHatch() throws {
     let root = URL(fileURLWithPath: NSTemporaryDirectory())
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
