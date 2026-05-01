@@ -29,6 +29,21 @@ extract_version_from_docs() {
   sed -nE 's/.*Release reference version:[^0-9]*`?v?([0-9]+\.[0-9]+\.[0-9]+)`?.*/\1/p' "$1" | head -n 1
 }
 
+require_canonical_repo_slug() {
+  local file="$1"
+  local slug="OMT-Global/apw-cli"
+
+  if ! grep -q "$slug" "$file"; then
+    printf 'Repository slug check failed: %s does not reference %s\n' "$file" "$slug" >&2
+    exit 1
+  fi
+
+  if grep -Eq 'OMT-Global/apw([^-/]|$)|omt-global/apw-native' "$file"; then
+    printf 'Repository slug check failed: %s references a stale APW repo slug\n' "$file" >&2
+    exit 1
+  fi
+}
+
 cargo_version="$(extract_version_from_cargo "$1")"
 cli_version="$(extract_version_from_rust_source "$2")"
 types_version="$(extract_version_from_rust_source "$3")"
@@ -52,5 +67,8 @@ Version sync check failed:
 EOF
   exit 1
 fi
+
+require_canonical_repo_slug "$4"
+require_canonical_repo_slug "packaging/homebrew/install-from-source.sh"
 
 echo "Version sync check passed: $cargo_version"

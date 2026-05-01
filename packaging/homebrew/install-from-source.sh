@@ -36,8 +36,8 @@ TAP_PATH="$CLEANUP_TAP_PATH"
 mkdir -p "$TAP_PATH/Formula"
 cat > "$TAP_PATH/Formula/$FORMULA_NAME.rb" <<EOF
 class Apw < Formula
-  desc "Apple Password CLI and daemon (macOS-first)"
-  homepage "https://github.com/omt-global/apw-native"
+  desc "Apple Password CLI and local app broker (macOS-first)"
+  homepage "https://github.com/OMT-Global/apw-cli"
   version "$VERSION"
   url "file://$ARCHIVE_PATH"
   sha256 "$ARCHIVE_SHA256"
@@ -46,12 +46,15 @@ class Apw < Formula
   depends_on "rust" => :build
 
   def install
+    system "bash", "./scripts/build-native-app.sh"
     system "cargo", "build", "--manifest-path", "rust/Cargo.toml", "--release"
     bin.install "rust/target/release/apw"
+    libexec.install "native-app/dist/APW.app"
   end
 
   test do
-    assert_match(/^apw/, shell_output("#{bin}/apw --version"))
+    assert_match version.to_s, shell_output("#{bin}/apw --version")
+    assert_match "\"app\"", shell_output("#{bin}/apw status --json 2>&1")
   end
 end
 EOF
