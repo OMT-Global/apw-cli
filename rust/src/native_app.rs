@@ -28,6 +28,20 @@ const SOCKET_TIMEOUT_MS: u64 = 3_000;
 const CONNECT_RETRIES: usize = 10;
 const CONNECT_RETRY_DELAY_MS: u64 = 200;
 
+fn diagnostic(
+    status: &str,
+    id: &str,
+    message: impl Into<String>,
+    hint: impl Into<String>,
+) -> Value {
+    json!({
+        "id": id,
+        "status": status,
+        "message": message.into(),
+        "hint": hint.into(),
+    })
+}
+
 fn home_dir() -> PathBuf {
     match env::var("HOME").or_else(|_| env::var("USERPROFILE")) {
         Ok(dir) => PathBuf::from(dir),
@@ -214,6 +228,128 @@ fn read_bundle_version(bundle_path: &Path) -> Option<String> {
 
 fn load_status_file() -> Option<Value> {
     serde_json::from_str(&fs::read_to_string(native_app_status_path()).ok()?).ok()
+}
+
+fn command_output(command: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
+    Command::new(command).args(args).output()
+}
+
+fn command_version_check(id: &str, command: &str, args: &[&str], hint: &str) -> Value {
+    match command_output(command, args) {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let first_line = stdout
+                .lines()
+                .chain(stderr.lines())
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("available")
+                .trim()
+                .to_string();
+            diagnostic("OK", id, first_line, "")
+        }
+        Ok(output) => diagnostic(
+            "FAIL",
+            id,
+            format!("{command} exited with status {}", output.status),
+            hint,
+        ),
+        Err(_) => diagnostic("FAIL", id, format!("{command} was not found"), hint),
+    }
+}
+
+fn code_signing_identity_check() -> Value {
+    match command_output("security", &["find-identity", "-v", "-p", "codesigning"]) {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.contains("Developer ID Application") {
+                diagnostic(
+                    "OK",
+                    "developer_id_identity",
+                    "Developer ID Application identity found",
+                    "",
+                )
+            } else {
+                diagnostic(
+                    "WARN",
+                    "developer_id_identity",
+                    "No Developer ID Application signing identity was found",
+                    "Install the release signing certificate before notarized release builds.",
+                )
+            }
+        }
+        Ok(output) => diagnostic(
+            "WARN",
+            "developer_id_identity",
+            format!(
+                "security find-identity exited with status {}",
+                output.status
+            ),
+            "Run `security find-identity -v -p codesigning` on the release runner.",
+        ),
+        Err(_) => diagnostic(
+            "WARN",
+            "developer_id_identity",
+            "security CLI was not found",
+            "Run release signing diagnostics on macOS with Xcode command line tools installed.",
+        ),
+    }
+}
+
+fn ci_runner_environment_check() -> Value {
+    if env::var("CI").map(|value| value == "true").unwrap_or(false) {
+        let runner_os = env::var("RUNNER_OS").unwrap_or_else(|_| "unknown".to_string());
+        let runner_arch = env::var("RUNNER_ARCH").unwrap_or_else(|_| "unknown".to_string());
+        let runner_labels = env::var("RUNNER_LABELS")
+            .or_else(|_| env::var("APW_RUNNER_LABELS"))
+            .unwrap_or_default();
+        if runner_labels.is_empty() {
+            return diagnostic(
+                "WARN",
+                "runner_labels",
+                format!("CI runner reports os={runner_os}, arch={runner_arch}, but labels are not exposed"),
+                "Confirm the workflow runs on the documented self-hosted labels in docs/bootstrap/onboarding.md.",
+            );
+        }
+        return diagnostic(
+            "OK",
+            "runner_labels",
+            format!("CI runner labels: {runner_labels}; os={runner_os}; arch={runner_arch}"),
+            "",
+        );
+    }
+
+    diagnostic(
+        "WARN",
+        "runner_labels",
+        "Not running in GitHub Actions; runner labels cannot be verified locally",
+        "In CI, confirm shell-safe jobs use [self-hosted, synology, shell-only, public] and extended macOS validation uses [self-hosted, private, macOS, ARM64, xcode].",
+    )
+}
+
+fn ci_diagnostic_checks() -> Vec<Value> {
+    vec![
+        command_version_check(
+            "xcodebuild",
+            "xcodebuild",
+            &["-version"],
+            "Install Xcode and select it with `sudo xcode-select -s /Applications/Xcode.app`.",
+        ),
+        command_version_check(
+            "cargo",
+            "cargo",
+            &["--version"],
+            "Install Rust from https://rustup.rs/ before running Rust or release validation.",
+        ),
+        command_version_check(
+            "detect_secrets",
+            "detect-secrets",
+            &["--version"],
+            "Install detect-secrets or run the repo's configured secret scan environment.",
+        ),
+        code_signing_identity_check(),
+        ci_runner_environment_check(),
+    ]
 }
 
 fn rotate_broker_log_if_needed(path: &Path) -> Result<()> {
@@ -552,6 +688,7 @@ pub fn native_app_doctor() -> Result<Value> {
                 format!("Inspect broker logs at {}.", native_app_broker_log_path().display())
             ]),
         );
+        object.insert("ciDiagnostics".to_string(), json!(ci_diagnostic_checks()));
     }
     Ok(doctor)
 }
@@ -1073,6 +1210,23 @@ mod tests {
                 payload["frameworks"]["authenticationServicesLinked"],
                 json!(true)
             );
+            let diagnostics = payload["ciDiagnostics"].as_array().unwrap();
+            for id in [
+                "xcodebuild",
+                "cargo",
+                "detect_secrets",
+                "developer_id_identity",
+                "runner_labels",
+            ] {
+                assert!(
+                    diagnostics.iter().any(|entry| entry["id"] == json!(id)),
+                    "missing diagnostic {id}: {diagnostics:#?}"
+                );
+            }
+            assert!(diagnostics.iter().all(|entry| entry["status"]
+                .as_str()
+                .map(|status| ["OK", "WARN", "FAIL"].contains(&status))
+                .unwrap_or(false)));
             assert!(native_app_credentials_path().exists());
         });
     }
