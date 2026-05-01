@@ -24,7 +24,7 @@ const NATIVE_APP_RUNTIME_DIR_MODE: u32 = 0o700;
 const NATIVE_APP_FILE_MODE: u32 = 0o600;
 const MAX_BROKER_BYTES: usize = MAX_MESSAGE_BYTES;
 const MAX_BROKER_LOG_BYTES: u64 = 10 * 1024 * 1024;
-const SOCKET_TIMEOUT_MS: u64 = 3_000;
+const NATIVE_APP_SOCKET_TIMEOUT_MS: u64 = 3_000;
 const CONNECT_RETRIES: usize = 10;
 const CONNECT_RETRY_DELAY_MS: u64 = 200;
 
@@ -386,7 +386,7 @@ fn send_request(command: &str, payload: Value) -> Result<Value> {
         Some(connection) => connection,
         None => return send_request_via_executable(command, payload),
     };
-    let timeout = Duration::from_millis(SOCKET_TIMEOUT_MS);
+    let timeout = Duration::from_millis(NATIVE_APP_SOCKET_TIMEOUT_MS);
     let _ = stream.set_read_timeout(Some(timeout));
     let _ = stream.set_write_timeout(Some(timeout));
 
@@ -516,7 +516,8 @@ pub fn native_app_status() -> Value {
             "lastKnown": status_file,
             "live": live_status,
             "transport": "unix_socket",
-            "transportContract": "typed_json_envelope"
+            "transportContract": "typed_json_envelope",
+            "requestTimeoutMs": NATIVE_APP_SOCKET_TIMEOUT_MS
         }
     })
 }
@@ -1333,6 +1334,36 @@ print(json.dumps({
             assert_eq!(payload["transport"], "direct_exec");
 
             drop(listener);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn socket_request_times_out_when_broker_does_not_reply() {
+        with_temp_home(|| {
+            ensure_runtime_dir().unwrap();
+            let socket_path = native_app_socket_path();
+            let listener = UnixListener::bind(&socket_path).unwrap();
+            set_permissions(&socket_path, NATIVE_APP_FILE_MODE).unwrap();
+
+            let handle = std::thread::spawn(move || {
+                if let Ok((stream, _addr)) = listener.accept() {
+                    std::thread::sleep(Duration::from_millis(
+                        NATIVE_APP_SOCKET_TIMEOUT_MS.saturating_add(500),
+                    ));
+                    drop(stream);
+                }
+            });
+
+            let started = std::time::Instant::now();
+            let error = native_app_login("https://example.com").unwrap_err();
+            assert_eq!(error.code, Status::CommunicationTimeout);
+            assert!(
+                started.elapsed()
+                    < Duration::from_millis(NATIVE_APP_SOCKET_TIMEOUT_MS.saturating_add(2_000))
+            );
+
+            handle.join().unwrap();
         });
     }
 
