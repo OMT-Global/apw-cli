@@ -1,8 +1,8 @@
 class Apw < Formula
   desc "Apple Password CLI and local app broker (macOS-first)"
-  homepage "https://github.com/OMT-Global/apw"
+  homepage "https://github.com/OMT-Global/apw-cli"
   version "2.0.0"
-  url "https://github.com/OMT-Global/apw/archive/refs/tags/v2.0.0.tar.gz"
+  url "https://github.com/OMT-Global/apw-cli/archive/refs/tags/v2.0.0.tar.gz"
   sha256 "<replace-with-release-tarball-sha256>"
   license "GPL-3.0-only"
 
