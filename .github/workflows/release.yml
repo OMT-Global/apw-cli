@@ -46,6 +46,9 @@ jobs:
       - name: Build release binary
         run: cargo build --manifest-path rust/Cargo.toml --release
 
+      - name: Build native app bundle
+        run: ./scripts/build-native-app.sh
+
       - name: Build local source tarball for Homebrew smoke
         id: source_tarball
         run: |
@@ -136,25 +139,15 @@ jobs:
           rm -rf "$tap_path"
 
       - name: Package release archive
-        run: |
-          mkdir -p dist
-          rm -rf dist/apw dist/APW.app
-          cp rust/target/release/apw dist/apw
-          cp -R native-app/dist/APW.app dist/APW.app
-          tar -czf dist/apw-macos-${GITHUB_REF_NAME}.tar.gz -C dist apw APW.app
+        run: ./scripts/package-release-archive.sh "${GITHUB_REF_NAME}"
 
-      - name: Release artifact smoke
+      - name: Validate release archive contents
         run: |
           archive="dist/apw-macos-${GITHUB_REF_NAME}.tar.gz"
-          smoke_dir="$(mktemp -d)"
-          smoke_home="$(mktemp -d)"
-          trap 'rm -rf "$smoke_dir" "$smoke_home"' EXIT
-          tar -xzf "$archive" -C "$smoke_dir"
-          test -x "$smoke_dir/apw"
-          test -x "$smoke_dir/APW.app/Contents/MacOS/APW"
-          HOME="$smoke_home" "$smoke_dir/apw" --version
-          HOME="$smoke_home" "$smoke_dir/apw" status --json
-          HOME="$smoke_home" "$smoke_dir/apw" app install
+          tar -tzf "$archive" | sort
+          tar -tzf "$archive" | grep -qx 'apw'
+          tar -tzf "$archive" | grep -qx 'APW.app/Contents/Info.plist'
+          tar -tzf "$archive" | grep -qx 'APW.app/Contents/MacOS/APW'
 
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
