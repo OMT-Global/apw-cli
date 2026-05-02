@@ -216,13 +216,44 @@ publish_release_asset() {
 build_release_artifact() {
   local version="$1"
   local artifact_path="$ROOT_DIR/dist/apw-macos-v${version}.tar.gz"
+  local app_bundle="$ROOT_DIR/native-app/dist/APW.app"
   mkdir -p "$ROOT_DIR/dist"
 
+  if [[ ! -d "$app_bundle" ]]; then
+    echo "Expected APW app bundle not found: $app_bundle"
+    echo "Run ./scripts/build-native-app.sh before packaging the release artifact."
+    exit 1
+  fi
+
+  rm -rf "$ROOT_DIR/dist/apw" "$ROOT_DIR/dist/APW.app"
   cp "$BIN_PATH" "$ROOT_DIR/dist/apw"
-  tar -czf "$artifact_path" -C "$ROOT_DIR/dist" apw
-  rm "$ROOT_DIR/dist/apw"
+  cp -R "$app_bundle" "$ROOT_DIR/dist/APW.app"
+  tar -czf "$artifact_path" -C "$ROOT_DIR/dist" apw APW.app
+  rm -rf "$ROOT_DIR/dist/apw" "$ROOT_DIR/dist/APW.app"
 
   echo "$artifact_path"
+}
+
+smoke_release_artifact() {
+  local artifact="$1"
+  local smoke_dir
+  local smoke_home
+
+  smoke_dir="$(mktemp -d)"
+  smoke_home="$(mktemp -d)"
+  cleanup_release_smoke() {
+    rm -rf "$smoke_dir" "$smoke_home"
+  }
+  trap cleanup_release_smoke EXIT
+
+  tar -xzf "$artifact" -C "$smoke_dir"
+  test -x "$smoke_dir/apw"
+  test -x "$smoke_dir/APW.app/Contents/MacOS/APW"
+  HOME="$smoke_home" "$smoke_dir/apw" --version
+  HOME="$smoke_home" "$smoke_dir/apw" status --json
+  HOME="$smoke_home" "$smoke_dir/apw" app install
+  trap - EXIT
+  cleanup_release_smoke
 }
 
 normalize_tag() {
@@ -260,7 +291,7 @@ if [[ -n "$highest_existing_version" ]] && ! version_advances_history "${TAG#v}"
   exit 1
 fi
 
-printf '\n[1/8] Verifying version sync across release surfaces...\n'
+printf '\n[1/9] Verifying version sync across release surfaces...\n'
 bash "$VERIFY_SCRIPT" "$CARGO_MANIFEST" \
   "$ROOT_DIR/rust/src/cli.rs" \
   "$ROOT_DIR/rust/src/types.rs" \
@@ -269,7 +300,7 @@ bash "$VERIFY_SCRIPT" "$CARGO_MANIFEST" \
   "$ROOT_DIR/docs/INSTALLATION.md" \
   "$ROOT_DIR/docs/MIGRATION_AND_PARITY.md"
 
-printf '\n[2/8] Running release gates...\n'
+printf '\n[2/9] Running release gates...\n'
 cargo fmt --manifest-path "$CARGO_MANIFEST" -- --check
 cargo clippy --manifest-path "$CARGO_MANIFEST" --all-targets -- -D warnings
 if [[ "$SKIP_TESTS" -eq 0 ]]; then
@@ -278,15 +309,18 @@ if [[ "$SKIP_TESTS" -eq 0 ]]; then
   cargo test --manifest-path "$CARGO_MANIFEST" --test security_regressions
 fi
 
-printf '\n[3/8] Building release binary...\n'
+printf '\n[3/9] Building APW app bundle...\n'
+./scripts/build-native-app.sh
+
+printf '\n[4/9] Building release binary...\n'
 cargo build --manifest-path "$CARGO_MANIFEST" --release
 
-printf '\n[4/8] Health check release binary...\n'
+printf '\n[5/9] Health check release binary...\n'
 "$BIN_PATH" --version
 "$BIN_PATH" status --json
 
 if [[ "$HOST_SMOKE" -eq 1 ]]; then
-  printf '\n[5/8] Running browser host smoke...\n'
+  printf '\n[6/9] Running browser host smoke...\n'
   if [[ -n "$HOST_SMOKE_OTP_DOMAIN" ]]; then
     "$ROOT_DIR/scripts/browser-host-smoke.sh" \
       --bin "$BIN_PATH" \
@@ -299,14 +333,14 @@ if [[ "$HOST_SMOKE" -eq 1 ]]; then
   fi
 fi
 
-printf '\n[6/8] Creating tag %s...\n' "$TAG"
+printf '\n[7/9] Creating tag %s...\n' "$TAG"
 git tag -a "$TAG" -m "chore: release ${TAG}"
 VERSION="${TAG#v}"
 formula_url="$(extract_formula_url)"
 validate_formula_url_matches_tag "$formula_url" "$TAG"
 
 if [[ "$PUSH_TAG" -eq 1 ]]; then
-  printf '\n[7/8] Pushing tag %s...\n' "$TAG"
+  printf '\n[8/9] Pushing tag %s...\n' "$TAG"
   git push origin "$TAG"
   if [[ "$BREW_SMOKE" -eq 1 ]]; then
     if ! command -v brew >/dev/null 2>&1; then
@@ -333,9 +367,10 @@ else
 fi
 
 if [[ "$PUBLISH_RELEASE" -eq 1 ]]; then
-  printf '\n[8/8] Building release tarball and publishing assets for %s...\n' "$TAG"
+  printf '\n[9/9] Building release tarball and publishing assets for %s...\n' "$TAG"
   ARTIFACT_PATH="$(build_release_artifact "$VERSION")"
   echo "Created release artifact: $ARTIFACT_PATH"
+  smoke_release_artifact "$ARTIFACT_PATH"
   publish_release_asset "$ARTIFACT_PATH" "$TAG"
 fi
 
