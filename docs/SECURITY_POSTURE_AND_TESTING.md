@@ -27,6 +27,15 @@ Release reference version: `v2.0.0`
 - requests and responses use typed JSON envelopes with bounded payload sizes
 - bootstrap credentials are stored in a local runtime file for the supported demo domain only
 
+### Timeouts and failure modes
+
+- native app UNIX-socket requests use a `3s` read/write timeout
+- a hung broker socket returns a non-zero `CommunicationTimeout` error instead
+  of blocking the CLI indefinitely
+- direct executable fallback responses are still bounded by the same maximum
+  response size before JSON decoding
+- timed-out requests do not cache or persist partially returned credentials
+
 ## Required release gates
 
 Run these before publishing:
@@ -50,6 +59,7 @@ The Rust test suite covers:
 - stable JSON status shape
 - launch failure precedence over session errors
 - malformed or oversized payload rejection
+- native app socket timeout handling
 - native app diagnostics and bootstrap credential file initialization
 - end-to-end v2 app install, launch, status, doctor, and login flows
 - direct-exec fallback, unsupported-domain handling, denial handling, and malformed broker response mapping

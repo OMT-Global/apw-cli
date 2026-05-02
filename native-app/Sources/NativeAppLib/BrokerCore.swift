@@ -6,6 +6,7 @@ import Foundation
 private let runtimeDirectoryMode: mode_t = 0o700
 private let statusFileMode: mode_t = 0o600
 private let maxBrokerBytes = 32 * 1024
+private let brokerRequestTimeoutSeconds: TimeInterval = 3
 private let appSocketName = "broker.sock"
 private let statusFileName = "status.json"
 private let credentialsFileName = "credentials.json"
@@ -245,6 +246,7 @@ final class BrokerServer {
       "socketPath": paths.socketPath.path,
       "supportedDomains": supportedDomains(),
       "authenticationServicesLinked": true,
+      "requestTimeoutSeconds": brokerRequestTimeoutSeconds,
     ]
   }
 

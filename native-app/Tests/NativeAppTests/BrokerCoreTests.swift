@@ -245,8 +245,10 @@ final class BrokerCoreTests: XCTestCase {
 
     let payload = server.doctorPayload()
     let guidance = payload["guidance"] as? [String]
+    let broker = payload["broker"] as? [String: Any]
 
     XCTAssertNotNil(guidance)
     XCTAssertFalse(guidance?.contains(where: { $0.contains("APW_NATIVE_APP_AUTO_APPROVE") }) ?? true)
+    XCTAssertEqual(broker?["requestTimeoutSeconds"] as? TimeInterval, 3)
   }
 }
