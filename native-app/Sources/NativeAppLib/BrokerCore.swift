@@ -222,12 +222,9 @@ final class BrokerServer {
         error: nil,
         requestId: request.requestId
       )
-    case "login":
+    case "login", "fill":
       let url = request.payload?["url"] ?? ""
-      return try credentialResponse(for: url, intent: "login", requestId: request.requestId)
-    case "fill":
-      let url = request.payload?["url"] ?? ""
-      return try credentialResponse(for: url, intent: "fill", requestId: request.requestId)
+      return try credentialResponse(for: url, intent: request.command, requestId: request.requestId)
     default:
       return ResponseEnvelope(
         ok: false,
