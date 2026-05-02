@@ -12,6 +12,8 @@ Release reference version: `v2.0.0`
 - Archived implementation: [`legacy/deno/`](../legacy/deno/)
 - Packaging, release, fixes, and hardening land in the Rust CLI and native app
 - Legacy daemon/browser-helper code remains in-tree for migration only
+- Legacy daemon commands (`apw start`, `apw auth`, `apw pw`, and `apw otp`)
+  emit runtime deprecation warnings and are targeted for removal in `v2.1.0`.
 
 Archive rules: [ARCHIVE_POLICY.md](ARCHIVE_POLICY.md)
 
