@@ -1,7 +1,7 @@
 use crate::error::{APWError, Result};
 use crate::logging;
 use crate::types::{ExternalFallbackProvider, Status, MAX_MESSAGE_BYTES, VERSION};
-use crate::utils::read_config_file_or_empty;
+use crate::utils::{read_config_file, validate_external_provider_path};
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
@@ -698,7 +698,11 @@ fn native_app_request(intent: &str, url: &str) -> Result<Value> {
 }
 
 fn external_provider_login(url: &str) -> Result<Option<Value>> {
-    let config = read_config_file_or_empty();
+    let config = match read_config_file() {
+        Ok(config) => config,
+        Err(error) if error.message.starts_with("No config file at ") => return Ok(None),
+        Err(error) => return Err(error),
+    };
     let Some(provider) = config.fallback_provider else {
         return Ok(None);
     };
@@ -711,16 +715,7 @@ fn external_provider_login(url: &str) -> Result<Option<Value>> {
             ),
         ));
     };
-    let provider_path = PathBuf::from(provider_path);
-    if !provider_path.is_absolute() {
-        return Err(APWError::new(
-            Status::InvalidConfig,
-            format!(
-                "Fallback provider `{}` must use an absolute executable path.",
-                provider.as_str()
-            ),
-        ));
-    }
+    let provider_path = validate_external_provider_path(provider, provider_path)?;
 
     let host = url::Url::parse(url)
         .map_err(|_| APWError::new(Status::InvalidParam, "Invalid URL for external fallback."))?

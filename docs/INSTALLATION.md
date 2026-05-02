@@ -107,6 +107,21 @@ Healthy v2 bootstrap state usually looks like:
 apw login https://example.com
 ```
 
+### External password manager fallback
+
+When the native app broker cannot return a credential, APW can fall back to a
+configured external password manager CLI provider. The fallback executable path
+is security-sensitive and is validated before APW invokes it.
+
+`fallbackProviderPath` must follow these rules:
+
+- Use an absolute path. Relative paths and `~` expansion are rejected.
+- Resolve through `realpath`/canonicalization. Symlinks are followed and the
+  resolved executable is the file APW invokes.
+- Resolve to a regular file owned by the current user.
+- Use `0755` permissions or more restrictive permissions. Group-writable,
+  world-writable, and special-mode executables are rejected.
+
 ## Diagnostics
 
 ### Machine-readable status

@@ -3,6 +3,8 @@ use serde_json::Value;
 use serial_test::serial;
 use std::env;
 use std::fs;
+use std::os::unix::fs::symlink;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
@@ -67,6 +69,78 @@ fn write_launch_failure_config(home: &Path, last_launch_error: &str) {
         serde_json::to_vec_pretty(&config).expect("failed to serialize config"),
     )
     .expect("failed to write config");
+}
+
+fn write_fallback_provider_config(home: &Path, provider_path: &str) {
+    let config = serde_json::json!({
+        "schema": 1,
+        "port": 10_000,
+        "host": "127.0.0.1",
+        "username": "demo",
+        "sharedKey": "demo-shared-key",
+        "runtimeMode": "auto",
+        "secretSource": "file",
+        "fallbackProvider": "bitwarden",
+        "fallbackProviderPath": provider_path,
+        "createdAt": Utc::now().to_rfc3339(),
+    });
+
+    fs::create_dir_all(home.join(".apw")).expect("failed to create config directory");
+    fs::write(
+        home.join(".apw/config.json"),
+        serde_json::to_vec_pretty(&config).expect("failed to serialize config"),
+    )
+    .expect("failed to write config");
+}
+
+fn write_bitwarden_provider(path: &Path) {
+    fs::write(
+        path,
+        r#"#!/usr/bin/env python3
+import json
+import sys
+
+if sys.argv[1:] == ["list", "items", "--search", "vault.example.com"]:
+    print(json.dumps([
+      {
+        "login": {
+          "username": "alice@example.com",
+          "password": "secret-bitwarden",
+          "uris": [{"uri": "https://vault.example.com/login"}]
+        }
+      }
+    ]))
+else:
+    raise SystemExit(1)
+"#,
+    )
+    .expect("failed to write fallback provider");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+        .expect("failed to chmod fallback provider");
+}
+
+fn install_native_app_no_results(home: &Path) {
+    let executable = home
+        .join(".apw")
+        .join("native-app")
+        .join("installed")
+        .join("APW.app")
+        .join("Contents")
+        .join("MacOS")
+        .join("APW");
+    fs::create_dir_all(executable.parent().expect("missing executable parent"))
+        .expect("failed to create native app bundle");
+    fs::write(
+        &executable,
+        r#"#!/usr/bin/env python3
+import json
+
+print(json.dumps({"ok": False, "code": 3, "error": "no credential"}))
+"#,
+    )
+    .expect("failed to write native app executable");
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))
+        .expect("failed to chmod native app executable");
 }
 
 #[test]
@@ -141,6 +215,106 @@ fn status_json_has_stable_shape() {
         assert_eq!(output["payload"]["session"]["authenticated"], false);
         assert!(output["payload"]["session"]["createdAt"].is_string());
         assert!(output["payload"]["session"]["expired"].is_boolean());
+    });
+}
+
+#[test]
+#[serial]
+fn login_rejects_relative_external_provider_path() {
+    with_temp_home(|home| {
+        install_native_app_no_results(home);
+        write_fallback_provider_config(home, "bw");
+
+        let (status, stdout, stderr) =
+            run_command(home, &["--json", "login", "https://vault.example.com"]);
+
+        assert_eq!(
+            status, 102,
+            "status={status}, stdout={stdout}, stderr={stderr}"
+        );
+        let output = parse_json_output(&stderr);
+        assert_eq!(output["code"], 102);
+        let error = output["error"].as_str().unwrap_or_default();
+        assert!(error.contains("absolute executable path"));
+        assert!(error.contains("relative paths are not allowed"));
+    });
+}
+
+#[test]
+#[serial]
+fn login_rejects_tilde_external_provider_path() {
+    with_temp_home(|home| {
+        install_native_app_no_results(home);
+        write_fallback_provider_config(home, "~/bin/bw");
+
+        let (status, stdout, stderr) =
+            run_command(home, &["--json", "login", "https://vault.example.com"]);
+
+        assert_eq!(
+            status, 102,
+            "status={status}, stdout={stdout}, stderr={stderr}"
+        );
+        let output = parse_json_output(&stderr);
+        assert_eq!(output["code"], 102);
+        let error = output["error"].as_str().unwrap_or_default();
+        assert!(error.contains("absolute executable path"));
+        assert!(error.contains("`~`"));
+    });
+}
+
+#[test]
+#[serial]
+fn login_rejects_world_writable_external_provider_path() {
+    with_temp_home(|home| {
+        install_native_app_no_results(home);
+        let provider_dir = TempDir::new().expect("failed to create provider tempdir");
+        let provider_path = provider_dir.path().join("bw");
+        write_bitwarden_provider(&provider_path);
+        fs::set_permissions(&provider_path, fs::Permissions::from_mode(0o777))
+            .expect("failed to chmod fallback provider");
+        write_fallback_provider_config(home, &provider_path.display().to_string());
+
+        let (status, stdout, stderr) =
+            run_command(home, &["--json", "login", "https://vault.example.com"]);
+
+        assert_eq!(
+            status, 102,
+            "status={status}, stdout={stdout}, stderr={stderr}"
+        );
+        let output = parse_json_output(&stderr);
+        assert_eq!(output["code"], 102);
+        let error = output["error"].as_str().unwrap_or_default();
+        assert!(error.contains("insecure permissions"));
+        assert!(error.contains("0755 or more restrictive"));
+    });
+}
+
+#[test]
+#[serial]
+fn login_rejects_external_provider_symlink_to_insecure_target() {
+    with_temp_home(|home| {
+        install_native_app_no_results(home);
+        let provider_dir = TempDir::new().expect("failed to create provider tempdir");
+        let provider_path = provider_dir.path().join("bw-real");
+        let provider_link = provider_dir.path().join("bw-link");
+        write_bitwarden_provider(&provider_path);
+        fs::set_permissions(&provider_path, fs::Permissions::from_mode(0o777))
+            .expect("failed to chmod fallback provider");
+        symlink(&provider_path, &provider_link).expect("failed to create provider symlink");
+        write_fallback_provider_config(home, &provider_link.display().to_string());
+
+        let (status, stdout, stderr) =
+            run_command(home, &["--json", "login", "https://vault.example.com"]);
+
+        assert_eq!(
+            status, 102,
+            "status={status}, stdout={stdout}, stderr={stderr}"
+        );
+        let output = parse_json_output(&stderr);
+        assert_eq!(output["code"], 102);
+        let error = output["error"].as_str().unwrap_or_default();
+        assert!(error.contains(&provider_path.display().to_string()));
+        assert!(error.contains("insecure permissions"));
     });
 }
 
