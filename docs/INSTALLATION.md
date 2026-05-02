@@ -69,6 +69,19 @@ This validates:
 Use [`packaging/homebrew/apw.rb`](../packaging/homebrew/apw.rb)
 as the formula template.
 
+Render the formula for the release tarball before opening the tap PR:
+
+```bash
+version="2.0.0"
+sha256="$(curl -fsSL "https://github.com/OMT-Global/apw-cli/archive/refs/tags/v${version}.tar.gz" | shasum -a 256 | awk '{print $1}')"
+./scripts/render-homebrew-formula.sh "$version" "$sha256"
+```
+
+Then copy `packaging/homebrew/apw.rb` into the tap as `Formula/apw.rb`,
+commit it, and open a tap pull request. Until tap publishing credentials are
+available to the release workflow, this manual PR is the supported publishing
+path.
+
 After installing with Homebrew, install the per-user APW app bundle:
 
 ```bash

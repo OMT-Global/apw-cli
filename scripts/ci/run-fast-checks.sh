@@ -16,6 +16,11 @@ if [ ! -x scripts/bump-version.sh ]; then
   exit 1
 fi
 
+if [ ! -x scripts/render-homebrew-formula.sh ]; then
+  echo "scripts/render-homebrew-formula.sh must be executable." >&2
+  exit 1
+fi
+
 chmod +x ./.github/scripts/verify-version-sync.sh
 ./.github/scripts/verify-version-sync.sh \
   rust/Cargo.toml \
@@ -29,5 +34,7 @@ chmod +x ./.github/scripts/verify-version-sync.sh
 while IFS= read -r -d '' script; do
   bash -n "$script"
 done < <(find .github/scripts scripts -type f -name '*.sh' -print0)
+
+./scripts/test-render-homebrew-formula.sh
 
 echo "APW fast checks passed."
