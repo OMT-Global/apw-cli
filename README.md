@@ -104,8 +104,13 @@ in `~/.apw/config.json` with an absolute provider path:
 }
 ```
 
-Supported fallback providers are `1password` and `bitwarden`. APW does not
-cache external-provider credentials.
+Supported fallback providers are `1password` and `bitwarden`. Configuration alone
+does not activate fallback for `apw login`; callers must pass
+`apw login --external-fallback <url>` to explicitly choose this reduced-security
+path when the native broker is unavailable or returns no results. JSON fallback
+payloads use `transport: "external_cli"`, `securityMode: "reduced_external_cli"`,
+and `externalFallbackExplicit: true` so automation can distinguish them from
+native broker approvals. APW does not cache external-provider credentials.
 
 ## Common commands
 

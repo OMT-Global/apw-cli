@@ -292,6 +292,11 @@ pub struct DoctorCommand {}
 #[derive(Args)]
 pub struct LoginCommand {
     pub url: String,
+    #[arg(
+        long = "external-fallback",
+        help = "Explicitly allow reduced-security external password-manager CLI fallback when the native broker is unavailable or returns no results."
+    )]
+    pub external_fallback: bool,
 }
 
 #[derive(Args)]
@@ -453,7 +458,10 @@ fn run_fill(args: FillCommand, cli_json: bool) -> Result<(), APWError> {
 
 fn run_login(args: LoginCommand, cli_json: bool) -> Result<(), APWError> {
     logging::info("login", format!("requesting credential for {}", args.url));
-    let payload = native_app_login(&sanitize_native_credential_url(&args.url)?)?;
+    let payload = native_app_login(
+        &sanitize_native_credential_url(&args.url)?,
+        args.external_fallback,
+    )?;
     print_output(&payload, Status::Success, cli_json);
     Ok(())
 }

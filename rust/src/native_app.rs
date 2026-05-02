@@ -495,6 +495,20 @@ fn uuid_like_suffix() -> String {
     format!("{:016x}{:016x}", rng.gen::<u64>(), rng.gen::<u64>())
 }
 
+fn external_fallback_status() -> Value {
+    let config = read_config_file_or_empty();
+    let provider_path = config.fallback_provider_path.unwrap_or_default();
+    json!({
+        "configured": config.fallback_provider.is_some(),
+        "provider": config.fallback_provider.map(|provider| provider.as_str()),
+        "providerPathConfigured": !provider_path.is_empty(),
+        "providerPathAbsolute": Path::new(&provider_path).is_absolute(),
+        "requiresExplicitLoginFlag": true,
+        "loginFlag": "--external-fallback",
+        "securityMode": "reduced_external_cli"
+    })
+}
+
 pub fn native_app_status() -> Value {
     let install_path = native_app_bundle_install_path();
     let executable_path = native_app_executable_in_bundle(&install_path);
@@ -510,6 +524,7 @@ pub fn native_app_status() -> Value {
         "socketPath": native_app_socket_path(),
         "credentialsPath": native_app_credentials_path(),
         "brokerLogPath": native_app_broker_log_path(),
+        "externalFallback": external_fallback_status(),
         "service": {
             "running": socket_running(),
             "statusFile": native_app_status_path(),
@@ -675,12 +690,14 @@ pub fn native_app_launch() -> Result<Value> {
     }))
 }
 
-pub fn native_app_login(url: &str) -> Result<Value> {
+pub fn native_app_login(url: &str, allow_external_fallback: bool) -> Result<Value> {
     match native_app_request("login", url) {
         Ok(payload) => Ok(payload),
         Err(error) if matches!(error.code, Status::NoResults | Status::ProcessNotRunning) => {
-            if let Some(payload) = external_provider_login(url)? {
-                return Ok(payload);
+            if allow_external_fallback {
+                if let Some(payload) = external_provider_login(url)? {
+                    return Ok(payload);
+                }
             }
             Err(error)
         }
@@ -1036,7 +1053,10 @@ fn external_cli_payload(
         "username": username,
         "password": password,
         "transport": "external_cli",
-        "userMediated": false,
+        "userMediated": true,
+        "mediation": "explicit_cli_flag",
+        "externalFallbackExplicit": true,
+        "securityMode": "reduced_external_cli",
         "source": provider.as_str(),
     })
 }
@@ -1193,7 +1213,7 @@ else:
             )
             .unwrap();
 
-            let payload = native_app_login("https://vault.example.com").unwrap();
+            let payload = native_app_login("https://vault.example.com", true).unwrap();
             assert_eq!(payload["source"], "1password");
             assert_eq!(payload["transport"], "external_cli");
             assert_eq!(payload["username"], "alice@example.com");
@@ -1255,11 +1275,49 @@ else:
             )
             .unwrap();
 
-            let payload = native_app_login("https://vault.example.com").unwrap();
+            let payload = native_app_login("https://vault.example.com", true).unwrap();
             assert_eq!(payload["source"], "bitwarden");
             assert_eq!(payload["transport"], "external_cli");
             assert_eq!(payload["username"], "alice@example.com");
             assert_eq!(payload["url"], "https://vault.example.com/login");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn login_requires_explicit_external_fallback_even_when_configured() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("bw");
+            fs::write(
+                &provider_path,
+                r#"#!/usr/bin/env python3
+import json
+print(json.dumps([{"login":{"username":"alice@example.com","password":"secret","uris":[{"uri":"https://vault.example.com"}]}}]))
+"#,
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::Bitwarden),
+                fallback_provider_path: Some(provider_path.display().to_string()),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            let error = native_app_login("https://vault.example.com", false).unwrap_err();
+            assert_eq!(error.code, Status::ProcessNotRunning);
         });
     }
 
@@ -1282,7 +1340,7 @@ else:
             )
             .unwrap();
 
-            let error = native_app_login("https://vault.example.com").unwrap_err();
+            let error = native_app_login("https://vault.example.com", true).unwrap_err();
             assert_eq!(error.code, Status::InvalidConfig);
             assert!(error.message.contains("absolute executable path"));
         });
@@ -1330,7 +1388,7 @@ print(json.dumps({
             permissions.set_mode(0o755);
             fs::set_permissions(&executable, permissions).unwrap();
 
-            let payload = native_app_login("https://example.com").unwrap();
+            let payload = native_app_login("https://example.com", true).unwrap();
             assert_eq!(payload["transport"], "direct_exec");
 
             drop(listener);
@@ -1356,7 +1414,7 @@ print(json.dumps({
             });
 
             let started = std::time::Instant::now();
-            let error = native_app_login("https://example.com").unwrap_err();
+            let error = native_app_login("https://example.com", true).unwrap_err();
             assert_eq!(error.code, Status::CommunicationTimeout);
             assert!(
                 started.elapsed()
@@ -1409,7 +1467,7 @@ print(json.dumps({
             permissions.set_mode(0o755);
             fs::set_permissions(&executable, permissions).unwrap();
 
-            let payload = native_app_login("https://example.com").unwrap();
+            let payload = native_app_login("https://example.com", true).unwrap();
             assert_eq!(payload["transport"], "direct_exec");
         });
     }
