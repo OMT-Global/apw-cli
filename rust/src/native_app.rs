@@ -1,6 +1,6 @@
 use crate::error::{APWError, Result};
 use crate::logging;
-use crate::types::{ExternalFallbackProvider, Status, MAX_MESSAGE_BYTES, VERSION};
+use crate::types::{APWConfigV1, ExternalFallbackProvider, Status, MAX_MESSAGE_BYTES, VERSION};
 use crate::utils::read_config_file_or_empty;
 use serde_json::{json, Value};
 use std::env;
@@ -12,7 +12,7 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const NATIVE_APP_BUNDLE_NAME: &str = "APW.app";
 const NATIVE_APP_EXECUTABLE_NAME: &str = "APW";
@@ -25,6 +25,9 @@ const NATIVE_APP_FILE_MODE: u32 = 0o600;
 const MAX_BROKER_BYTES: usize = MAX_MESSAGE_BYTES;
 const MAX_BROKER_LOG_BYTES: u64 = 10 * 1024 * 1024;
 const NATIVE_APP_SOCKET_TIMEOUT_MS: u64 = 3_000;
+const EXTERNAL_PROVIDER_DEFAULT_TIMEOUT_MS: u64 = 5_000;
+const EXTERNAL_PROVIDER_DEFAULT_MAX_INVOCATIONS: u32 = 10;
+const EXTERNAL_PROVIDER_POLL_MS: u64 = 20;
 const CONNECT_RETRIES: usize = 10;
 const CONNECT_RETRY_DELAY_MS: u64 = 200;
 
@@ -122,6 +125,10 @@ pub fn native_app_credentials_path() -> PathBuf {
 
 pub fn native_app_broker_log_path() -> PathBuf {
     native_app_runtime_dir().join(NATIVE_APP_BROKER_LOG_NAME)
+}
+
+fn native_app_fallback_provider_state_path() -> PathBuf {
+    native_app_runtime_dir().join("fallback-provider-session.json")
 }
 
 pub fn native_app_install_dir() -> PathBuf {
@@ -697,6 +704,181 @@ fn native_app_request(intent: &str, url: &str) -> Result<Value> {
     Ok(payload)
 }
 
+struct ExternalProviderLimits {
+    session_id: String,
+    timeout_ms: u64,
+    max_invocations: u32,
+}
+
+struct ExternalProviderCommandOutput {
+    success: bool,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+fn external_provider_limits(config: &APWConfigV1) -> ExternalProviderLimits {
+    ExternalProviderLimits {
+        session_id: config.created_at.clone(),
+        timeout_ms: config
+            .fallback_provider_timeout_ms
+            .filter(|value| *value > 0)
+            .unwrap_or(EXTERNAL_PROVIDER_DEFAULT_TIMEOUT_MS),
+        max_invocations: config
+            .fallback_provider_max_invocations
+            .unwrap_or(EXTERNAL_PROVIDER_DEFAULT_MAX_INVOCATIONS),
+    }
+}
+
+fn reserve_external_provider_invocation(
+    provider: ExternalFallbackProvider,
+    limits: &ExternalProviderLimits,
+) -> Result<()> {
+    ensure_runtime_dir()?;
+    let path = native_app_fallback_provider_state_path();
+    let state = fs::read_to_string(&path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok());
+    let current_count = state
+        .as_ref()
+        .filter(|value| value.get("sessionId").and_then(Value::as_str) == Some(&limits.session_id))
+        .and_then(|value| value.get("invocations").and_then(Value::as_u64))
+        .unwrap_or(0);
+
+    if current_count >= u64::from(limits.max_invocations) {
+        return Err(APWError::new(
+            Status::GenericError,
+            format!(
+                "External fallback provider `{}` invocation limit exceeded for this APW session (limit: {}). Reauthenticate or increase `fallbackProviderMaxInvocations`.",
+                provider.as_str(),
+                limits.max_invocations
+            ),
+        ));
+    }
+
+    let updated = json!({
+        "sessionId": limits.session_id,
+        "provider": provider.as_str(),
+        "invocations": current_count + 1,
+    });
+    fs::write(
+        &path,
+        serde_json::to_vec_pretty(&updated).map_err(|error| {
+            APWError::new(
+                Status::GenericError,
+                format!("Failed to encode fallback provider invocation state: {error}"),
+            )
+        })?,
+    )
+    .map_err(|error| {
+        APWError::new(
+            Status::InvalidConfig,
+            format!("Failed to write fallback provider invocation state: {error}"),
+        )
+    })?;
+    set_permissions(&path, NATIVE_APP_FILE_MODE)?;
+    Ok(())
+}
+
+fn run_external_provider_command(
+    provider: ExternalFallbackProvider,
+    path: &Path,
+    config: &APWConfigV1,
+    args: &[&str],
+) -> Result<ExternalProviderCommandOutput> {
+    let limits = external_provider_limits(config);
+    reserve_external_provider_invocation(provider, &limits)?;
+
+    let mut command = Command::new(path);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // SAFETY: `pre_exec` runs after fork and before exec. The closure only calls
+    // `libc::setsid()`, which is async-signal-safe and avoids orphaning provider
+    // subprocesses when a timeout kills the process group.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let mut child = command.spawn().map_err(|error| {
+        APWError::new(
+            Status::ProcessNotRunning,
+            format!(
+                "Failed to execute {} CLI at {}: {error}",
+                provider.as_str(),
+                path.display()
+            ),
+        )
+    })?;
+    let started = Instant::now();
+    let timeout = Duration::from_millis(limits.timeout_ms);
+
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|error| {
+            APWError::new(
+                Status::ProcessNotRunning,
+                format!(
+                    "Failed to inspect {} CLI at {}: {error}",
+                    provider.as_str(),
+                    path.display()
+                ),
+            )
+        })? {
+            break status;
+        }
+
+        if started.elapsed() >= timeout {
+            let pid = child.id() as i32;
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(APWError::new(
+                Status::CommunicationTimeout,
+                format!(
+                    "External fallback provider `{}` timed out after {}ms and was killed.",
+                    provider.as_str(),
+                    limits.timeout_ms
+                ),
+            ));
+        }
+
+        std::thread::sleep(Duration::from_millis(EXTERNAL_PROVIDER_POLL_MS));
+    };
+
+    let mut stdout = Vec::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        pipe.read_to_end(&mut stdout).map_err(|error| {
+            APWError::new(
+                Status::ProtoInvalidResponse,
+                format!("Failed to read {} CLI stdout: {error}", provider.as_str()),
+            )
+        })?;
+    }
+    let mut stderr = Vec::new();
+    if let Some(mut pipe) = child.stderr.take() {
+        pipe.read_to_end(&mut stderr).map_err(|error| {
+            APWError::new(
+                Status::ProtoInvalidResponse,
+                format!("Failed to read {} CLI stderr: {error}", provider.as_str()),
+            )
+        })?;
+    }
+
+    Ok(ExternalProviderCommandOutput {
+        success: status.success(),
+        stdout,
+        stderr,
+    })
+}
+
 fn external_provider_login(url: &str) -> Result<Option<Value>> {
     let config = read_config_file_or_empty();
     let Some(provider) = config.fallback_provider else {
@@ -730,34 +912,28 @@ fn external_provider_login(url: &str) -> Result<Option<Value>> {
 
     let payload = match provider {
         ExternalFallbackProvider::OnePassword => {
-            load_1password_credential(&provider_path, &host, url)?
+            load_1password_credential(&provider_path, &config, &host, url)?
         }
         ExternalFallbackProvider::Bitwarden => {
-            load_bitwarden_credential(&provider_path, &host, url)?
+            load_bitwarden_credential(&provider_path, &config, &host, url)?
         }
     };
     Ok(Some(payload))
 }
 
-fn load_1password_credential(path: &Path, host: &str, raw_url: &str) -> Result<Value> {
-    let list_output = Command::new(path)
-        .arg("item")
-        .arg("list")
-        .arg("--categories")
-        .arg("LOGIN")
-        .arg("--format")
-        .arg("json")
-        .output()
-        .map_err(|error| {
-            APWError::new(
-                Status::ProcessNotRunning,
-                format!(
-                    "Failed to execute 1Password CLI at {}: {error}",
-                    path.display()
-                ),
-            )
-        })?;
-    if !list_output.status.success() {
+fn load_1password_credential(
+    path: &Path,
+    config: &APWConfigV1,
+    host: &str,
+    raw_url: &str,
+) -> Result<Value> {
+    let list_output = run_external_provider_command(
+        ExternalFallbackProvider::OnePassword,
+        path,
+        config,
+        &["item", "list", "--categories", "LOGIN", "--format", "json"],
+    )?;
+    if !list_output.success {
         return Err(APWError::new(
             Status::NoResults,
             format!(
@@ -794,23 +970,13 @@ fn load_1password_credential(path: &Path, host: &str, raw_url: &str) -> Result<V
             )
         })?;
 
-    let output = Command::new(path)
-        .arg("item")
-        .arg("get")
-        .arg(item_id)
-        .arg("--format")
-        .arg("json")
-        .output()
-        .map_err(|error| {
-            APWError::new(
-                Status::ProcessNotRunning,
-                format!(
-                    "Failed to execute 1Password CLI at {}: {error}",
-                    path.display()
-                ),
-            )
-        })?;
-    if !output.status.success() {
+    let output = run_external_provider_command(
+        ExternalFallbackProvider::OnePassword,
+        path,
+        config,
+        &["item", "get", item_id, "--format", "json"],
+    )?;
+    if !output.success {
         return Err(APWError::new(
             Status::NoResults,
             format!(
@@ -882,23 +1048,19 @@ fn load_1password_credential(path: &Path, host: &str, raw_url: &str) -> Result<V
     ))
 }
 
-fn load_bitwarden_credential(path: &Path, host: &str, raw_url: &str) -> Result<Value> {
-    let output = Command::new(path)
-        .arg("list")
-        .arg("items")
-        .arg("--search")
-        .arg(host)
-        .output()
-        .map_err(|error| {
-            APWError::new(
-                Status::ProcessNotRunning,
-                format!(
-                    "Failed to execute Bitwarden CLI at {}: {error}",
-                    path.display()
-                ),
-            )
-        })?;
-    if !output.status.success() {
+fn load_bitwarden_credential(
+    path: &Path,
+    config: &APWConfigV1,
+    host: &str,
+    raw_url: &str,
+) -> Result<Value> {
+    let output = run_external_provider_command(
+        ExternalFallbackProvider::Bitwarden,
+        path,
+        config,
+        &["list", "items", "--search", host],
+    )?;
+    if !output.success {
         return Err(APWError::new(
             Status::NoResults,
             format!(
@@ -1285,6 +1447,119 @@ else:
             let error = native_app_login("https://vault.example.com").unwrap_err();
             assert_eq!(error.code, Status::InvalidConfig);
             assert!(error.message.contains("absolute executable path"));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn external_provider_timeout_kills_provider_process() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("bw");
+            let pid_path = provider_dir.path().join("provider.pid");
+            fs::write(
+                &provider_path,
+                format!(
+                    r#"#!/usr/bin/env python3
+import os
+import pathlib
+import time
+
+pathlib.Path({pid_path:?}).write_text(str(os.getpid()), encoding="utf-8")
+time.sleep(10)
+"#,
+                    pid_path = pid_path.display().to_string()
+                ),
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::Bitwarden),
+                fallback_provider_path: Some(provider_path.display().to_string()),
+                fallback_provider_timeout_ms: Some(500),
+                fallback_provider_max_invocations: Some(5),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            let started = Instant::now();
+            let error = native_app_login("https://vault.example.com").unwrap_err();
+            assert_eq!(error.code, Status::CommunicationTimeout);
+            assert!(error.message.contains("timed out after 500ms"));
+            assert!(error.message.contains("was killed"));
+            assert!(started.elapsed() < Duration::from_secs(3));
+
+            let pid: i32 = fs::read_to_string(pid_path).unwrap().parse().unwrap();
+            assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn external_provider_invocation_limit_returns_clear_error() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("bw");
+            fs::write(
+                &provider_path,
+                r#"#!/usr/bin/env python3
+import json
+import sys
+
+if sys.argv[1:] == ["list", "items", "--search", "vault.example.com"]:
+    print(json.dumps([
+      {
+        "name": "Work Vault",
+        "login": {
+          "username": "alice@example.com",
+          "password": "secret-bitwarden",
+          "uris": [{"uri": "https://vault.example.com/login"}]
+        }
+      }
+    ]))
+else:
+    raise SystemExit(1)
+"#,
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::Bitwarden),
+                fallback_provider_path: Some(provider_path.display().to_string()),
+                fallback_provider_max_invocations: Some(1),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            let payload = native_app_login("https://vault.example.com").unwrap();
+            assert_eq!(payload["source"], "bitwarden");
+
+            let error = native_app_login("https://vault.example.com").unwrap_err();
+            assert_eq!(error.code, Status::GenericError);
+            assert!(error.message.contains("invocation limit exceeded"));
+            assert!(error.message.contains("fallbackProviderMaxInvocations"));
         });
     }
 

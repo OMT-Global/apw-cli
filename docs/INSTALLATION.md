@@ -107,6 +107,43 @@ Healthy v2 bootstrap state usually looks like:
 apw login https://example.com
 ```
 
+## External fallback provider limits
+
+The external CLI fallback is opt-in and only runs when the native APW app path
+cannot return a credential. Configure it in `~/.apw/config.json` with an
+absolute executable path:
+
+```json
+{
+  "fallbackProvider": "bitwarden",
+  "fallbackProviderPath": "/opt/homebrew/bin/bw"
+}
+```
+
+Supported providers are `bitwarden` and `1password`.
+
+External provider executions are bounded by default:
+
+- `fallbackProviderTimeoutMs`: per-process timeout in milliseconds. Default:
+  `5000`. Values less than `1` fall back to the default. A timed-out provider
+  process is killed and the credential request fails with a clear timeout
+  error.
+- `fallbackProviderMaxInvocations`: maximum external provider process
+  invocations per APW session. Default: `10`. Set `0` to block external
+  provider invocations for the current session. When the limit is exceeded, APW
+  returns a clear error instead of executing the provider again.
+
+Example with explicit limits:
+
+```json
+{
+  "fallbackProvider": "1password",
+  "fallbackProviderPath": "/opt/homebrew/bin/op",
+  "fallbackProviderTimeoutMs": 3000,
+  "fallbackProviderMaxInvocations": 6
+}
+```
+
 ## Diagnostics
 
 ### Machine-readable status
