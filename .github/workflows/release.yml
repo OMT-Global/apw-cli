@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   release:
@@ -160,3 +161,89 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/apw-macos-${{ github.ref_name }}.tar.gz
+
+  publish-homebrew-tap:
+    name: Publish Homebrew tap PR
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      TAP_REPOSITORY: ${{ vars.HOMEBREW_TAP_REPOSITORY || 'OMT-Global/homebrew-apw' }}
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Check Homebrew tap token
+        id: tap_token
+        run: |
+          if [ -n "$TAP_TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::HOMEBREW_TAP_TOKEN is not configured; skipping tap PR creation."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout source repo
+        if: steps.tap_token.outputs.available == 'true'
+        uses: actions/checkout@v5
+        with:
+          path: source
+
+      - name: Checkout Homebrew tap
+        if: steps.tap_token.outputs.available == 'true'
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.TAP_REPOSITORY }}
+          token: ${{ env.TAP_TOKEN }}
+          path: tap
+
+      - name: Download release source tarball and compute SHA-256
+        if: steps.tap_token.outputs.available == 'true'
+        id: homebrew_source
+        working-directory: source
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          tarball="$RUNNER_TEMP/apw-${GITHUB_REF_NAME}.tar.gz"
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          curl --fail --location --retry 3 --output "$tarball" "$url"
+          sha256="$(sha256sum "$tarball" | awk '{print $1}')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Render tap formula
+        if: steps.tap_token.outputs.available == 'true'
+        run: |
+          mkdir -p tap/Formula
+          source/scripts/render-homebrew-formula.sh \
+            "${{ steps.homebrew_source.outputs.version }}" \
+            "${{ steps.homebrew_source.outputs.sha256 }}" \
+            source/packaging/homebrew/apw.rb.template \
+            tap/Formula/apw.rb
+
+      - name: Open draft PR in Homebrew tap
+        if: steps.tap_token.outputs.available == 'true'
+        working-directory: tap
+        env:
+          GH_TOKEN: ${{ env.TAP_TOKEN }}
+          VERSION: ${{ steps.homebrew_source.outputs.version }}
+          SHA256: ${{ steps.homebrew_source.outputs.sha256 }}
+        run: |
+          branch="release/apw-v${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add Formula/apw.rb
+          if git diff --cached --quiet; then
+            echo "Tap formula already up to date for v${VERSION}."
+            exit 0
+          fi
+          git commit -m "Update apw formula to v${VERSION}"
+          git push --force-with-lease origin "$branch"
+          gh pr create \
+            --repo "$TAP_REPOSITORY" \
+            --head "$branch" \
+            --base main \
+            --draft \
+            --title "Update apw formula to v${VERSION}" \
+            --body "Updates apw.rb for ${GITHUB_REPOSITORY}@${GITHUB_REF_NAME}.\n\nSHA-256: \\`${SHA256}\\`" \
+            || gh pr edit "$branch" --repo "$TAP_REPOSITORY" --body "Updates apw.rb for ${GITHUB_REPOSITORY}@${GITHUB_REF_NAME}.\n\nSHA-256: \\`${SHA256}\\`"

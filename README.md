@@ -76,7 +76,8 @@ For local formula validation from this checkout:
 ```
 
 The formula template is kept in
-[`packaging/homebrew/apw.rb`](packaging/homebrew/apw.rb).
+[`packaging/homebrew/apw.rb.template`](packaging/homebrew/apw.rb.template) and can be rendered with
+`scripts/render-homebrew-formula.sh <version> <sha256>`.
 
 ## Quick start
 
