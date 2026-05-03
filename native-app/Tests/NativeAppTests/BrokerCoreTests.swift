@@ -28,6 +28,23 @@ final class BrokerCoreTests: XCTestCase {
     BrokerServer(paths: makePaths(root), approvalPrompter: StubApprovalPrompter(decision: decision))
   }
 
+  private func withDemoEnv(_ value: String?, run: () throws -> Void) rethrows {
+    let previousValue = getenv("APW_DEMO").map { String(cString: $0) }
+    if let value {
+      setenv("APW_DEMO", value, 1)
+    } else {
+      unsetenv("APW_DEMO")
+    }
+    defer {
+      if let previousValue {
+        setenv("APW_DEMO", previousValue, 1)
+      } else {
+        unsetenv("APW_DEMO")
+      }
+    }
+    try run()
+  }
+
   private func writeCredentials(
     at path: URL,
     mode: Int = 0o600,
@@ -108,6 +125,39 @@ final class BrokerCoreTests: XCTestCase {
     XCTAssertThrowsError(try server.loadCredentials()) { error in
       XCTAssertTrue(String(describing: error).contains("0600"))
     }
+  }
+
+  func testDemoCredentialsFileCreationRequiresDemoEnvironmentGate() throws {
+    let defaultRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let defaultPaths = makePaths(defaultRoot)
+    try FileManager.default.createDirectory(
+      at: defaultRoot,
+      withIntermediateDirectories: true,
+      attributes: nil
+    )
+
+    try withDemoEnv(nil) {
+      try makeServer(root: defaultRoot).ensureCredentialsFile()
+    }
+    XCTAssertFalse(FileManager.default.fileExists(atPath: defaultPaths.credentialsPath.path))
+
+    let demoRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let demoPaths = makePaths(demoRoot)
+    try FileManager.default.createDirectory(
+      at: demoRoot,
+      withIntermediateDirectories: true,
+      attributes: nil
+    )
+
+    try withDemoEnv("1") {
+      try makeServer(root: demoRoot).ensureCredentialsFile()
+    }
+    XCTAssertTrue(FileManager.default.fileExists(atPath: demoPaths.credentialsPath.path))
+    let credentials = try makeServer(root: demoRoot).loadCredentials()
+    XCTAssertEqual(credentials.demo, true)
+    XCTAssertEqual(credentials.credentials.first?.username, "demo@example.com")
   }
 
   func testSocketListenerSetupAndTeardownUses0600Permissions() throws {

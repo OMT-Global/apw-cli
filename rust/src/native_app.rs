@@ -272,6 +272,9 @@ fn ensure_default_credentials_file() -> Result<()> {
     if path.exists() {
         return Ok(());
     }
+    if env::var("APW_DEMO").ok().as_deref() != Some("1") {
+        return Ok(());
+    }
     let content = serde_json::to_vec_pretty(&default_credentials_payload()).map_err(|error| {
         APWError::new(
             Status::InvalidConfig,
@@ -1065,16 +1068,52 @@ mod tests {
         result
     }
 
+    fn with_demo_env<F, R>(value: Option<&str>, run: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        let previous_value = env::var("APW_DEMO").ok();
+        if let Some(value) = value {
+            env::set_var("APW_DEMO", value);
+        } else {
+            env::remove_var("APW_DEMO");
+        }
+        let result = run();
+        if let Some(value) = previous_value {
+            env::set_var("APW_DEMO", value);
+        } else {
+            env::remove_var("APW_DEMO");
+        }
+        result
+    }
+
     #[test]
     #[serial]
-    fn doctor_creates_default_credentials_file() {
+    fn doctor_does_not_create_default_credentials_file_without_demo_gate() {
         with_temp_home(|| {
-            let payload = native_app_doctor().unwrap();
-            assert_eq!(
-                payload["frameworks"]["authenticationServicesLinked"],
-                json!(true)
-            );
-            assert!(native_app_credentials_path().exists());
+            with_demo_env(None, || {
+                let payload = native_app_doctor().unwrap();
+                assert_eq!(
+                    payload["frameworks"]["authenticationServicesLinked"],
+                    json!(true)
+                );
+                assert!(!native_app_credentials_path().exists());
+            });
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn doctor_creates_default_credentials_file_with_demo_gate() {
+        with_temp_home(|| {
+            with_demo_env(Some("1"), || {
+                let payload = native_app_doctor().unwrap();
+                assert_eq!(
+                    payload["frameworks"]["authenticationServicesLinked"],
+                    json!(true)
+                );
+                assert!(native_app_credentials_path().exists());
+            });
         });
     }
 

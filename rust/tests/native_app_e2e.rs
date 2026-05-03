@@ -438,6 +438,7 @@ fn wait_for_socket_transport(fixture: &NativeAppFixture) -> Value {
 #[serial]
 fn doctor_bootstraps_runtime_without_installed_bundle() {
     let fixture = NativeAppFixture::new();
+    let credentials_path = fixture.home().join(".apw/native-app/credentials.json");
 
     let output = run_apw(&fixture, &["--json", "doctor"], &[]);
     assert_eq!(output.status, 0, "{output:#?}");
@@ -449,10 +450,11 @@ fn doctor_bootstraps_runtime_without_installed_bundle() {
         payload["payload"]["frameworks"]["authenticationServicesLinked"],
         true
     );
-    assert!(fixture
-        .home()
-        .join(".apw/native-app/credentials.json")
-        .exists());
+    assert!(!credentials_path.exists());
+
+    let demo_output = run_apw(&fixture, &["--json", "doctor"], &[("APW_DEMO", "1")]);
+    assert_eq!(demo_output.status, 0, "{demo_output:#?}");
+    assert!(credentials_path.exists());
 }
 
 #[test]
