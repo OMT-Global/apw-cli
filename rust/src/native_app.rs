@@ -11,7 +11,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
 const NATIVE_APP_BUNDLE_NAME: &str = "APW.app";
@@ -27,6 +27,10 @@ const MAX_BROKER_LOG_BYTES: u64 = 10 * 1024 * 1024;
 const NATIVE_APP_SOCKET_TIMEOUT_MS: u64 = 3_000;
 const CONNECT_RETRIES: usize = 10;
 const CONNECT_RETRY_DELAY_MS: u64 = 200;
+#[cfg(not(test))]
+const EXTERNAL_FALLBACK_CLI_TIMEOUT_MS: u64 = 10_000;
+#[cfg(test)]
+const EXTERNAL_FALLBACK_CLI_TIMEOUT_MS: u64 = 500;
 
 fn home_dir() -> PathBuf {
     match env::var("HOME").or_else(|_| env::var("USERPROFILE")) {
@@ -756,24 +760,76 @@ fn external_provider_login(url: &str) -> Result<Option<Value>> {
     Ok(Some(payload))
 }
 
+fn run_external_provider_command(
+    mut command: Command,
+    provider_name: &str,
+    path: &Path,
+    host: &str,
+) -> Result<Output> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|error| {
+        APWError::new(
+            Status::ProcessNotRunning,
+            format!(
+                "Failed to execute {provider_name} CLI at {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    let timeout = Duration::from_millis(EXTERNAL_FALLBACK_CLI_TIMEOUT_MS);
+    let started = std::time::Instant::now();
+    loop {
+        if child
+            .try_wait()
+            .map_err(|error| {
+                APWError::new(
+                    Status::ProcessNotRunning,
+                    format!(
+                        "Failed while waiting for {provider_name} CLI at {}: {error}",
+                        path.display()
+                    ),
+                )
+            })?
+            .is_some()
+        {
+            return child.wait_with_output().map_err(|error| {
+                APWError::new(
+                    Status::ProcessNotRunning,
+                    format!(
+                        "Failed to read {provider_name} CLI output at {}: {error}",
+                        path.display()
+                    ),
+                )
+            });
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(APWError::new(
+                Status::CommunicationTimeout,
+                format!(
+                    "{provider_name} CLI timed out after {} ms while looking up a credential for {host}.",
+                    EXTERNAL_FALLBACK_CLI_TIMEOUT_MS
+                ),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn load_1password_credential(path: &Path, host: &str, raw_url: &str) -> Result<Value> {
-    let list_output = Command::new(path)
+    let mut command = Command::new(path);
+    command
         .arg("item")
         .arg("list")
         .arg("--categories")
         .arg("LOGIN")
         .arg("--format")
-        .arg("json")
-        .output()
-        .map_err(|error| {
-            APWError::new(
-                Status::ProcessNotRunning,
-                format!(
-                    "Failed to execute 1Password CLI at {}: {error}",
-                    path.display()
-                ),
-            )
-        })?;
+        .arg("json");
+    let list_output = run_external_provider_command(command, "1Password", path, host)?;
     if !list_output.status.success() {
         return Err(APWError::new(
             Status::NoResults,
@@ -811,22 +867,14 @@ fn load_1password_credential(path: &Path, host: &str, raw_url: &str) -> Result<V
             )
         })?;
 
-    let output = Command::new(path)
+    let mut command = Command::new(path);
+    command
         .arg("item")
         .arg("get")
         .arg(item_id)
         .arg("--format")
-        .arg("json")
-        .output()
-        .map_err(|error| {
-            APWError::new(
-                Status::ProcessNotRunning,
-                format!(
-                    "Failed to execute 1Password CLI at {}: {error}",
-                    path.display()
-                ),
-            )
-        })?;
+        .arg("json");
+    let output = run_external_provider_command(command, "1Password", path, host)?;
     if !output.status.success() {
         return Err(APWError::new(
             Status::NoResults,
@@ -900,21 +948,9 @@ fn load_1password_credential(path: &Path, host: &str, raw_url: &str) -> Result<V
 }
 
 fn load_bitwarden_credential(path: &Path, host: &str, raw_url: &str) -> Result<Value> {
-    let output = Command::new(path)
-        .arg("list")
-        .arg("items")
-        .arg("--search")
-        .arg(host)
-        .output()
-        .map_err(|error| {
-            APWError::new(
-                Status::ProcessNotRunning,
-                format!(
-                    "Failed to execute Bitwarden CLI at {}: {error}",
-                    path.display()
-                ),
-            )
-        })?;
+    let mut command = Command::new(path);
+    command.arg("list").arg("items").arg("--search").arg(host);
+    let output = run_external_provider_command(command, "Bitwarden", path, host)?;
     if !output.status.success() {
         return Err(APWError::new(
             Status::NoResults,
@@ -1280,6 +1316,72 @@ else:
             assert_eq!(payload["transport"], "external_cli");
             assert_eq!(payload["username"], "alice@example.com");
             assert_eq!(payload["url"], "https://vault.example.com/login");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn external_1password_provider_times_out() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("op");
+            fs::write(
+                &provider_path,
+                format!(
+                    "#!/bin/sh\nsleep {}\n",
+                    (EXTERNAL_FALLBACK_CLI_TIMEOUT_MS / 1_000) + 2
+                ),
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let started = std::time::Instant::now();
+            let error = load_1password_credential(
+                &provider_path,
+                "vault.example.com",
+                "https://vault.example.com",
+            )
+            .unwrap_err();
+            assert_eq!(error.code, Status::CommunicationTimeout);
+            assert!(
+                started.elapsed()
+                    < Duration::from_millis(EXTERNAL_FALLBACK_CLI_TIMEOUT_MS.saturating_add(2_000))
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn external_bitwarden_provider_times_out() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("bw");
+            fs::write(
+                &provider_path,
+                format!(
+                    "#!/bin/sh\nsleep {}\n",
+                    (EXTERNAL_FALLBACK_CLI_TIMEOUT_MS / 1_000) + 2
+                ),
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let started = std::time::Instant::now();
+            let error = load_bitwarden_credential(
+                &provider_path,
+                "vault.example.com",
+                "https://vault.example.com",
+            )
+            .unwrap_err();
+            assert_eq!(error.code, Status::CommunicationTimeout);
+            assert!(
+                started.elapsed()
+                    < Duration::from_millis(EXTERNAL_FALLBACK_CLI_TIMEOUT_MS.saturating_add(2_000))
+            );
         });
     }
 
