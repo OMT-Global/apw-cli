@@ -30,6 +30,7 @@ ROOT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CARGO_MANIFEST="$ROOT_DIR/rust/Cargo.toml"
 VERIFY_SCRIPT="$ROOT_DIR/.github/scripts/verify-version-sync.sh"
 BIN_PATH="$ROOT_DIR/rust/target/release/apw"
+PACKAGE_ARCHIVE_SCRIPT="$ROOT_DIR/scripts/package-release-archive.sh"
 
 TAG=""
 PUSH_TAG=0
@@ -104,6 +105,11 @@ fi
 
 if [[ ! -f "$VERIFY_SCRIPT" ]]; then
   echo "Expected version-sync helper not found: $VERIFY_SCRIPT"
+  exit 1
+fi
+
+if [[ ! -x "$PACKAGE_ARCHIVE_SCRIPT" ]]; then
+  echo "Expected release archive helper not found or not executable: $PACKAGE_ARCHIVE_SCRIPT"
   exit 1
 fi
 
@@ -215,23 +221,8 @@ publish_release_asset() {
 
 build_release_artifact() {
   local version="$1"
-  local artifact_path="$ROOT_DIR/dist/apw-macos-v${version}.tar.gz"
-  local app_bundle="$ROOT_DIR/native-app/dist/APW.app"
-  mkdir -p "$ROOT_DIR/dist"
 
-  if [[ ! -d "$app_bundle" ]]; then
-    echo "Expected APW app bundle not found: $app_bundle"
-    echo "Run ./scripts/build-native-app.sh before packaging the release artifact."
-    exit 1
-  fi
-
-  rm -rf "$ROOT_DIR/dist/apw" "$ROOT_DIR/dist/APW.app"
-  cp "$BIN_PATH" "$ROOT_DIR/dist/apw"
-  cp -R "$app_bundle" "$ROOT_DIR/dist/APW.app"
-  tar -czf "$artifact_path" -C "$ROOT_DIR/dist" apw APW.app
-  rm -rf "$ROOT_DIR/dist/apw" "$ROOT_DIR/dist/APW.app"
-
-  echo "$artifact_path"
+  "$PACKAGE_ARCHIVE_SCRIPT" "v${version}"
 }
 
 smoke_release_artifact() {
@@ -309,11 +300,15 @@ if [[ "$SKIP_TESTS" -eq 0 ]]; then
   cargo test --manifest-path "$CARGO_MANIFEST" --test security_regressions
 fi
 
-printf '\n[3/9] Building APW app bundle...\n'
-./scripts/build-native-app.sh
-
-printf '\n[4/9] Building release binary...\n'
+printf '
+[3/9] Building release binary...
+'
 cargo build --manifest-path "$CARGO_MANIFEST" --release
+
+printf '
+[4/9] Building native app bundle...
+'
+"$ROOT_DIR/scripts/build-native-app.sh"
 
 printf '\n[5/9] Health check release binary...\n'
 "$BIN_PATH" --version
