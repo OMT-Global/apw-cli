@@ -95,6 +95,9 @@ jobs:
           ./rust/target/release/apw --version
           ./rust/target/release/apw status --json
 
+      - name: Build native app bundle
+        run: ./scripts/build-native-app.sh
+
       - name: Homebrew smoke install from source tarball
         env:
           APW_SRC_TARBALL: ${{ steps.source_tarball.outputs.path }}
@@ -135,8 +138,23 @@ jobs:
       - name: Package release archive
         run: |
           mkdir -p dist
+          rm -rf dist/apw dist/APW.app
           cp rust/target/release/apw dist/apw
-          tar -czf dist/apw-macos-${GITHUB_REF_NAME}.tar.gz -C dist apw
+          cp -R native-app/dist/APW.app dist/APW.app
+          tar -czf dist/apw-macos-${GITHUB_REF_NAME}.tar.gz -C dist apw APW.app
+
+      - name: Release artifact smoke
+        run: |
+          archive="dist/apw-macos-${GITHUB_REF_NAME}.tar.gz"
+          smoke_dir="$(mktemp -d)"
+          smoke_home="$(mktemp -d)"
+          trap 'rm -rf "$smoke_dir" "$smoke_home"' EXIT
+          tar -xzf "$archive" -C "$smoke_dir"
+          test -x "$smoke_dir/apw"
+          test -x "$smoke_dir/APW.app/Contents/MacOS/APW"
+          HOME="$smoke_home" "$smoke_dir/apw" --version
+          HOME="$smoke_home" "$smoke_dir/apw" status --json
+          HOME="$smoke_home" "$smoke_dir/apw" app install
 
       - name: Publish release assets
         uses: softprops/action-gh-release@v2

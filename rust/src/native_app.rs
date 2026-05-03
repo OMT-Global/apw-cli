@@ -142,6 +142,7 @@ pub fn native_app_executable_in_bundle(bundle_path: &Path) -> PathBuf {
 fn resolve_packaged_native_app_bundle() -> Result<PathBuf> {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut candidates = vec![
+        cwd.join(NATIVE_APP_BUNDLE_NAME),
         cwd.join("native-app")
             .join("dist")
             .join(NATIVE_APP_BUNDLE_NAME),
@@ -155,6 +156,7 @@ fn resolve_packaged_native_app_bundle() -> Result<PathBuf> {
 
     if let Ok(exe) = env::current_exe() {
         if let Some(parent) = exe.parent() {
+            candidates.push(parent.join(NATIVE_APP_BUNDLE_NAME));
             candidates.push(
                 parent
                     .join("../libexec")

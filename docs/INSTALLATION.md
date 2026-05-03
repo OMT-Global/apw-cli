@@ -45,6 +45,28 @@ cargo install --path rust --locked
 apw app install
 ```
 
+## Install from a release archive
+
+Release archives are named `apw-macos-vX.Y.Z.tar.gz` and contain:
+
+```text
+apw
+APW.app/
+```
+
+Extract the archive and keep `apw` beside `APW.app` while installing the
+per-user app bundle:
+
+```bash
+tar -xzf apw-macos-vX.Y.Z.tar.gz
+./apw --version
+./apw status --json
+./apw app install
+```
+
+After `apw app install`, the CLI copies `APW.app` into
+`~/.apw/native-app/installed/APW.app`.
+
 ## Homebrew
 
 ### Local formula smoke test
