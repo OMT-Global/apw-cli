@@ -2,10 +2,18 @@
 
     ## Repo Governance
 
+    This manifest update prepares the desired GitHub governance state, but it does
+    not by itself mutate live repository settings. Treat issue #17 as complete only
+    after a maintainer runs `project-bootstrap apply github --manifest
+    ./project.bootstrap.yaml` or otherwise verifies the equivalent GitHub settings
+    are live.
+
     - Confirm the repository exists at `OMT-Global/apw-cli`.
     - Confirm branch protection or rulesets on `main` require one approval and code owner review.
     - Confirm branch protection points at the `CI Gate` status.
     - Confirm `delete branch on merge` and `allow auto-merge` are enabled.
+    - Confirm projects and wiki are disabled in live repository settings.
+    - Confirm `dev`, `stage`, and `prod` GitHub environments exist with the reviewer gates described below.
 
     ## Environments
 
