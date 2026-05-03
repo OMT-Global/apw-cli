@@ -88,8 +88,8 @@ This validates:
 
 ### Publish your own tap
 
-Use [`packaging/homebrew/apw.rb`](../packaging/homebrew/apw.rb)
-as the formula template.
+Use [`packaging/homebrew/apw.rb.template`](../packaging/homebrew/apw.rb.template)
+as the formula template. Render it with `scripts/render-homebrew-formula.sh <version> <sha256>`; the release workflow uses the same helper to open a draft PR against the Homebrew tap.
 
 Render the formula for the release tarball before opening the tap PR:
 
