@@ -760,6 +760,17 @@ fn external_provider_login(url: &str) -> Result<Option<Value>> {
     Ok(Some(payload))
 }
 
+fn read_external_provider_stream_limited<R: Read + Send + 'static>(
+    mut stream: R,
+) -> std::io::Result<Vec<u8>> {
+    let mut output = Vec::with_capacity(MAX_BROKER_BYTES.min(8 * 1024));
+    stream
+        .by_ref()
+        .take((MAX_BROKER_BYTES + 1) as u64)
+        .read_to_end(&mut output)?;
+    Ok(output)
+}
+
 fn run_external_provider_command(
     mut command: Command,
     provider_name: &str,
@@ -779,31 +790,40 @@ fn run_external_provider_command(
             ),
         )
     })?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        APWError::new(
+            Status::ProcessNotRunning,
+            format!(
+                "Failed to capture {provider_name} CLI stdout at {}.",
+                path.display()
+            ),
+        )
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        APWError::new(
+            Status::ProcessNotRunning,
+            format!(
+                "Failed to capture {provider_name} CLI stderr at {}.",
+                path.display()
+            ),
+        )
+    })?;
+    let stdout_reader = std::thread::spawn(move || read_external_provider_stream_limited(stdout));
+    let stderr_reader = std::thread::spawn(move || read_external_provider_stream_limited(stderr));
+
     let timeout = Duration::from_millis(EXTERNAL_FALLBACK_CLI_TIMEOUT_MS);
     let started = std::time::Instant::now();
-    loop {
-        if child
-            .try_wait()
-            .map_err(|error| {
-                APWError::new(
-                    Status::ProcessNotRunning,
-                    format!(
-                        "Failed while waiting for {provider_name} CLI at {}: {error}",
-                        path.display()
-                    ),
-                )
-            })?
-            .is_some()
-        {
-            return child.wait_with_output().map_err(|error| {
-                APWError::new(
-                    Status::ProcessNotRunning,
-                    format!(
-                        "Failed to read {provider_name} CLI output at {}: {error}",
-                        path.display()
-                    ),
-                )
-            });
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|error| {
+            APWError::new(
+                Status::ProcessNotRunning,
+                format!(
+                    "Failed while waiting for {provider_name} CLI at {}: {error}",
+                    path.display()
+                ),
+            )
+        })? {
+            break status;
         }
         if started.elapsed() >= timeout {
             let _ = child.kill();
@@ -817,7 +837,63 @@ fn run_external_provider_command(
             ));
         }
         std::thread::sleep(Duration::from_millis(20));
+    };
+
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| {
+            APWError::new(
+                Status::ProcessNotRunning,
+                format!(
+                    "Failed to read {provider_name} CLI stdout at {}.",
+                    path.display()
+                ),
+            )
+        })?
+        .map_err(|error| {
+            APWError::new(
+                Status::ProcessNotRunning,
+                format!(
+                    "Failed to read {provider_name} CLI stdout at {}: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| {
+            APWError::new(
+                Status::ProcessNotRunning,
+                format!(
+                    "Failed to read {provider_name} CLI stderr at {}.",
+                    path.display()
+                ),
+            )
+        })?
+        .map_err(|error| {
+            APWError::new(
+                Status::ProcessNotRunning,
+                format!(
+                    "Failed to read {provider_name} CLI stderr at {}: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+
+    if stdout.len() > MAX_BROKER_BYTES || stderr.len() > MAX_BROKER_BYTES {
+        return Err(APWError::new(
+            Status::ProtoInvalidResponse,
+            format!(
+                "{provider_name} CLI returned more than {MAX_BROKER_BYTES} bytes while looking up a credential for {host}."
+            ),
+        ));
     }
+
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 fn load_1password_credential(path: &Path, host: &str, raw_url: &str) -> Result<Value> {
@@ -1382,6 +1458,70 @@ else:
                 started.elapsed()
                     < Duration::from_millis(EXTERNAL_FALLBACK_CLI_TIMEOUT_MS.saturating_add(2_000))
             );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn external_1password_provider_rejects_oversized_output() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("op");
+            fs::write(
+                &provider_path,
+                format!(
+                    "#!/usr/bin/env python3
+import sys
+sys.stdout.write('[' + ('x' * {}) + ']')
+",
+                    MAX_BROKER_BYTES + 1
+                ),
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let error = load_1password_credential(
+                &provider_path,
+                "vault.example.com",
+                "https://vault.example.com",
+            )
+            .unwrap_err();
+            assert_eq!(error.code, Status::ProtoInvalidResponse);
+            assert!(error.message.contains("returned more than"));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn external_bitwarden_provider_rejects_oversized_output() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("bw");
+            fs::write(
+                &provider_path,
+                format!(
+                    "#!/usr/bin/env python3
+import sys
+sys.stdout.write('[' + ('x' * {}) + ']')
+",
+                    MAX_BROKER_BYTES + 1
+                ),
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let error = load_bitwarden_credential(
+                &provider_path,
+                "vault.example.com",
+                "https://vault.example.com",
+            )
+            .unwrap_err();
+            assert_eq!(error.code, Status::ProtoInvalidResponse);
+            assert!(error.message.contains("returned more than"));
         });
     }
 
