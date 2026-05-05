@@ -1,8 +1,8 @@
 use crate::error::{APWError, Result};
 use crate::secrets::{delete_shared_key, read_shared_key, supports_keychain, write_shared_key};
 use crate::types::{
-    normalize_status, APWConfig, APWConfigV1, APWRuntimeConfig, RuntimeMode, SecretSource,
-    DEFAULT_HOST, DEFAULT_PORT,
+    normalize_status, APWConfig, APWConfigV1, APWRuntimeConfig, ExternalFallbackProvider,
+    RuntimeMode, SecretSource, DEFAULT_HOST, DEFAULT_PORT,
 };
 use base64::{engine::general_purpose, Engine as _};
 use chrono::{TimeZone, Utc};
@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -23,6 +24,7 @@ const CONFIG_DIRECTORY_MODE: u32 = 0o700;
 const CONFIG_FILE_MODE: u32 = 0o600;
 const CONFIG_SCHEMA: i32 = 1;
 const MAX_CONFIG_SIZE_BYTES: usize = 10 * 1024;
+const EXTERNAL_PROVIDER_MAX_MODE: u32 = 0o755;
 
 #[derive(Debug, Clone)]
 pub struct ConfigReadOptions {
@@ -168,7 +170,7 @@ fn read_config_file_or_null() -> Result<APWConfigV1> {
                 "Invalid config host or port.",
             ));
         }
-        return Ok(v1);
+        return validate_external_provider_config(v1);
     }
 
     let legacy = serde_json::from_value::<APWConfig>(parsed).map_err(|_| {
@@ -179,6 +181,24 @@ fn read_config_file_or_null() -> Result<APWConfigV1> {
     })?;
 
     Ok(normalize_legacy_config(legacy))
+}
+
+fn validate_external_provider_config(mut config: APWConfigV1) -> Result<APWConfigV1> {
+    let Some(provider) = config.fallback_provider else {
+        return Ok(config);
+    };
+    let Some(provider_path) = config.fallback_provider_path.as_deref() else {
+        return Err(APWError::new(
+            crate::types::Status::InvalidConfig,
+            format!(
+                "Fallback provider `{}` requires an absolute `fallbackProviderPath`.",
+                provider.as_str()
+            ),
+        ));
+    };
+    let resolved_path = validate_external_provider_path(provider, provider_path)?;
+    config.fallback_provider_path = Some(resolved_path.display().to_string());
+    Ok(config)
 }
 
 fn resolve_secret_source(raw: &APWConfigV1) -> SecretSource {
@@ -225,8 +245,85 @@ fn normalize_legacy_config(raw: APWConfig) -> APWConfigV1 {
     }
 }
 
-fn read_config_file() -> Result<APWConfigV1> {
+pub fn read_config_file() -> Result<APWConfigV1> {
     read_config_file_or_null()
+}
+
+pub fn validate_external_provider_path(
+    provider: ExternalFallbackProvider,
+    provider_path: &str,
+) -> Result<PathBuf> {
+    let raw_path = PathBuf::from(provider_path);
+    if provider_path.starts_with('~') || !raw_path.is_absolute() {
+        return Err(APWError::new(
+            crate::types::Status::InvalidConfig,
+            format!(
+                "Fallback provider `{}` must use an absolute executable path; `~` and relative paths are not allowed.",
+                provider.as_str()
+            ),
+        ));
+    }
+
+    let resolved_path = raw_path.canonicalize().map_err(|error| {
+        APWError::new(
+            crate::types::Status::InvalidConfig,
+            format!(
+                "Fallback provider `{}` path {} could not be resolved: {error}",
+                provider.as_str(),
+                raw_path.display()
+            ),
+        )
+    })?;
+
+    let metadata = fs::metadata(&resolved_path).map_err(|error| {
+        APWError::new(
+            crate::types::Status::InvalidConfig,
+            format!(
+                "Fallback provider `{}` path {} could not be inspected: {error}",
+                provider.as_str(),
+                resolved_path.display()
+            ),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(APWError::new(
+            crate::types::Status::InvalidConfig,
+            format!(
+                "Fallback provider `{}` path {} must resolve to a regular file.",
+                provider.as_str(),
+                resolved_path.display()
+            ),
+        ));
+    }
+
+    // SAFETY: `geteuid` reads the effective uid for the current process and has
+    // no memory-safety preconditions.
+    let current_uid = unsafe { libc::geteuid() };
+    if metadata.uid() != current_uid {
+        return Err(APWError::new(
+            crate::types::Status::InvalidConfig,
+            format!(
+                "Fallback provider `{}` path {} must be owned by the current user.",
+                provider.as_str(),
+                resolved_path.display()
+            ),
+        ));
+    }
+
+    let mode = metadata.permissions().mode() & 0o7777;
+    if mode & !EXTERNAL_PROVIDER_MAX_MODE != 0 {
+        return Err(APWError::new(
+            crate::types::Status::InvalidConfig,
+            format!(
+                "Fallback provider `{}` path {} has insecure permissions {:04o}; use 0755 or more restrictive permissions.",
+                provider.as_str(),
+                resolved_path.display(),
+                mode
+            ),
+        ));
+    }
+
+    Ok(resolved_path)
 }
 
 #[allow(dead_code)]
