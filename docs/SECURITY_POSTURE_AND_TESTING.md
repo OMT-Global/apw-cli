@@ -19,9 +19,11 @@ Release reference version: `v2.0.0`
   set for bootstrap tests
 - legacy session secret material is kept in the user keychain when the `v1.x`
   compatibility path is used
-- external CLI fallback is opt-in via `fallbackProvider` +
-  `fallbackProviderPath`, requires an absolute executable path, and does not
-  cache returned credentials
+- external CLI fallback requires both configuration (`fallbackProvider` +
+  `fallbackProviderPath`) and an explicit `apw login --external-fallback <url>`
+  invocation, requires an absolute executable path, marks JSON output as
+  `transport: "external_cli"` / `securityMode: "reduced_external_cli"`, and does
+  not cache returned credentials
 
 ### Runtime broker hardening
 
