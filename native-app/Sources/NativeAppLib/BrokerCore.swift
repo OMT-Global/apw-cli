@@ -6,6 +6,7 @@ import Foundation
 private let runtimeDirectoryMode: mode_t = 0o700
 private let statusFileMode: mode_t = 0o600
 private let maxBrokerBytes = 32 * 1024
+private let brokerRequestTimeoutSeconds: TimeInterval = 3
 private let appSocketName = "broker.sock"
 private let statusFileName = "status.json"
 private let credentialsFileName = "credentials.json"
@@ -222,9 +223,9 @@ final class BrokerServer {
         error: nil,
         requestId: request.requestId
       )
-    case "login":
+    case "login", "fill":
       let url = request.payload?["url"] ?? ""
-      return try loginResponse(for: url, requestId: request.requestId)
+      return try credentialResponse(for: url, intent: request.command, requestId: request.requestId)
     default:
       return ResponseEnvelope(
         ok: false,
@@ -245,6 +246,7 @@ final class BrokerServer {
       "socketPath": paths.socketPath.path,
       "supportedDomains": supportedDomains(),
       "authenticationServicesLinked": true,
+      "requestTimeoutSeconds": brokerRequestTimeoutSeconds,
     ]
   }
 
@@ -263,13 +265,27 @@ final class BrokerServer {
     ]
   }
 
-  private func loginResponse(for rawURL: String, requestId: String?) throws -> ResponseEnvelope {
+  private func credentialResponse(
+    for rawURL: String,
+    intent: String,
+    requestId: String?
+  ) throws -> ResponseEnvelope {
     guard let url = URL(string: rawURL), let host = url.host?.lowercased(), !host.isEmpty else {
       return ResponseEnvelope(
         ok: false,
         code: 1,
         payload: nil,
-        error: "Invalid URL for native app login.",
+        error: "Invalid URL for native app credential request.",
+        requestId: requestId
+      )
+    }
+
+    guard url.scheme?.lowercased() == "https" else {
+      return ResponseEnvelope(
+        ok: false,
+        code: 1,
+        payload: nil,
+        error: "Native app credential requests require https URLs.",
         requestId: requestId
       )
     }
@@ -312,6 +328,7 @@ final class BrokerServer {
       code: 0,
       payload: [
         "status": AnyCodable("approved"),
+        "intent": AnyCodable(intent),
         "url": AnyCodable(credential.url),
         "domain": AnyCodable(credential.domain),
         "username": AnyCodable(credential.username),
@@ -346,8 +363,11 @@ final class BrokerServer {
     chmod(paths.runtimeRoot.path, runtimeDirectoryMode)
   }
 
-  private func ensureCredentialsFile() throws {
+  func ensureCredentialsFile() throws {
     guard !FileManager.default.fileExists(atPath: paths.credentialsPath.path) else {
+      return
+    }
+    guard ProcessInfo.processInfo.environment["APW_DEMO"] == "1" else {
       return
     }
     let content = CredentialsFile(

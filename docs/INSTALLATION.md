@@ -45,6 +45,28 @@ cargo install --path rust --locked
 apw app install
 ```
 
+## Install from a release archive
+
+Release archives are named `apw-macos-vX.Y.Z.tar.gz` and contain:
+
+```text
+apw
+APW.app/
+```
+
+Extract the archive and keep `apw` beside `APW.app` while installing the
+per-user app bundle:
+
+```bash
+tar -xzf apw-macos-vX.Y.Z.tar.gz
+./apw --version
+./apw status --json
+./apw app install
+```
+
+After `apw app install`, the CLI copies `APW.app` into
+`~/.apw/native-app/installed/APW.app`.
+
 ## Homebrew
 
 ### Local formula smoke test
@@ -66,8 +88,21 @@ This validates:
 
 ### Publish your own tap
 
-Use [`packaging/homebrew/apw.rb`](../packaging/homebrew/apw.rb)
-as the formula template.
+Use [`packaging/homebrew/apw.rb.template`](../packaging/homebrew/apw.rb.template)
+as the formula template. Render it with `scripts/render-homebrew-formula.sh <version> <sha256>`; the release workflow uses the same helper to open a draft PR against the Homebrew tap.
+
+Render the formula for the release tarball before opening the tap PR:
+
+```bash
+version="2.0.0"
+sha256="$(curl -fsSL "https://github.com/OMT-Global/apw-cli/archive/refs/tags/v${version}.tar.gz" | shasum -a 256 | awk '{print $1}')"
+./scripts/render-homebrew-formula.sh "$version" "$sha256"
+```
+
+Then copy `packaging/homebrew/apw.rb` into the tap as `Formula/apw.rb`,
+commit it, and open a tap pull request. Until tap publishing credentials are
+available to the release workflow, this manual PR is the supported publishing
+path.
 
 After installing with Homebrew, install the per-user APW app bundle:
 
@@ -106,6 +141,21 @@ Healthy v2 bootstrap state usually looks like:
 ```bash
 apw login https://example.com
 ```
+
+### External password manager fallback
+
+When the native app broker cannot return a credential, APW can fall back to a
+configured external password manager CLI provider. The fallback executable path
+is security-sensitive and is validated before APW invokes it.
+
+`fallbackProviderPath` must follow these rules:
+
+- Use an absolute path. Relative paths and `~` expansion are rejected.
+- Resolve through `realpath`/canonicalization. Symlinks are followed and the
+  resolved executable is the file APW invokes.
+- Resolve to a regular file owned by the current user.
+- Use `0755` permissions or more restrictive permissions. Group-writable,
+  world-writable, and special-mode executables are rejected.
 
 ## Diagnostics
 

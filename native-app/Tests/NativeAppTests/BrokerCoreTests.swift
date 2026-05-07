@@ -28,6 +28,23 @@ final class BrokerCoreTests: XCTestCase {
     BrokerServer(paths: makePaths(root), approvalPrompter: StubApprovalPrompter(decision: decision))
   }
 
+  private func withDemoEnv(_ value: String?, run: () throws -> Void) rethrows {
+    let previousValue = getenv("APW_DEMO").map { String(cString: $0) }
+    if let value {
+      setenv("APW_DEMO", value, 1)
+    } else {
+      unsetenv("APW_DEMO")
+    }
+    defer {
+      if let previousValue {
+        setenv("APW_DEMO", previousValue, 1)
+      } else {
+        unsetenv("APW_DEMO")
+      }
+    }
+    try run()
+  }
+
   private func writeCredentials(
     at path: URL,
     mode: Int = 0o600,
@@ -110,6 +127,39 @@ final class BrokerCoreTests: XCTestCase {
     }
   }
 
+  func testDemoCredentialsFileCreationRequiresDemoEnvironmentGate() throws {
+    let defaultRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let defaultPaths = makePaths(defaultRoot)
+    try FileManager.default.createDirectory(
+      at: defaultRoot,
+      withIntermediateDirectories: true,
+      attributes: nil
+    )
+
+    try withDemoEnv(nil) {
+      try makeServer(root: defaultRoot).ensureCredentialsFile()
+    }
+    XCTAssertFalse(FileManager.default.fileExists(atPath: defaultPaths.credentialsPath.path))
+
+    let demoRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let demoPaths = makePaths(demoRoot)
+    try FileManager.default.createDirectory(
+      at: demoRoot,
+      withIntermediateDirectories: true,
+      attributes: nil
+    )
+
+    try withDemoEnv("1") {
+      try makeServer(root: demoRoot).ensureCredentialsFile()
+    }
+    XCTAssertTrue(FileManager.default.fileExists(atPath: demoPaths.credentialsPath.path))
+    let credentials = try makeServer(root: demoRoot).loadCredentials()
+    XCTAssertEqual(credentials.demo, true)
+    XCTAssertEqual(credentials.credentials.first?.username, "demo@example.com")
+  }
+
   func testSocketListenerSetupAndTeardownUses0600Permissions() throws {
     let root = URL(fileURLWithPath: NSTemporaryDirectory())
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -144,6 +194,7 @@ final class BrokerCoreTests: XCTestCase {
       payload: ["url": "https://example.com"]
     ))
     XCTAssertEqual(allowResponse.ok, true)
+    XCTAssertEqual(allowResponse.payload?["intent"]?.value as? String, "login")
 
     let denyServer = makeServer(root: root, decision: false)
     let denyResponse = try denyServer.dispatch(request: RequestEnvelope(
@@ -155,6 +206,88 @@ final class BrokerCoreTests: XCTestCase {
     XCTAssertEqual(denyResponse.error, "User denied the APW login request.")
   }
 
+  func testFillDispatchUsesRealBrokerCredentialPathWithFillIntent() throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let paths = makePaths(root)
+    try writeCredentials(at: paths.credentialsPath)
+
+    let response = try makeServer(root: root, decision: true).dispatch(request: RequestEnvelope(
+      requestId: "fill-1",
+      command: "fill",
+      payload: ["url": "https://example.com"]
+    ))
+
+    XCTAssertEqual(response.ok, true)
+    XCTAssertEqual(response.code, 0)
+    XCTAssertEqual(response.requestId, "fill-1")
+    XCTAssertEqual(response.payload?["status"]?.value as? String, "approved")
+    XCTAssertEqual(response.payload?["intent"]?.value as? String, "fill")
+    XCTAssertEqual(response.payload?["domain"]?.value as? String, "example.com")
+    XCTAssertEqual(response.payload?["username"]?.value as? String, "demo@example.com")
+    XCTAssertEqual(response.payload?["password"]?.value as? String, "apw-demo-password")
+    XCTAssertEqual(response.payload?["transport"]?.value as? String, "unix_socket")
+    XCTAssertEqual(response.payload?["userMediated"]?.value as? Bool, true)
+  }
+
+  func testCredentialRequestsRejectNonHttpsUrls() throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let paths = makePaths(root)
+    try writeCredentials(at: paths.credentialsPath)
+
+    let server = makeServer(root: root, decision: true)
+    for command in ["login", "fill"] {
+      let response = try server.dispatch(request: RequestEnvelope(
+        requestId: "\(command)-non-https",
+        command: command,
+        payload: ["url": "ftp://example.com"]
+      ))
+      XCTAssertEqual(response.ok, false, command)
+      XCTAssertEqual(response.code, 1, command)
+      XCTAssertEqual(response.error, "Native app credential requests require https URLs.", command)
+    }
+  }
+
+  func testFillInvalidUnsupportedAndDeniedBehaviorMatchesLogin() throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let paths = makePaths(root)
+    try writeCredentials(at: paths.credentialsPath)
+
+    for command in ["login", "fill"] {
+      let invalid = try makeServer(root: root).dispatch(request: RequestEnvelope(
+        requestId: "\(command)-invalid",
+        command: command,
+        payload: ["url": "not-a-url"]
+      ))
+      XCTAssertEqual(invalid.ok, false, command)
+      XCTAssertEqual(invalid.code, 1, command)
+      XCTAssertEqual(invalid.error, "Invalid URL for native app credential request.", command)
+
+      let unsupported = try makeServer(root: root).dispatch(request: RequestEnvelope(
+        requestId: "\(command)-unsupported",
+        command: command,
+        payload: ["url": "https://unsupported.example"]
+      ))
+      XCTAssertEqual(unsupported.ok, false, command)
+      XCTAssertEqual(unsupported.code, 3, command)
+      XCTAssertEqual(
+        unsupported.error,
+        "The APW v2 bootstrap app currently supports only https://example.com.",
+        command
+      )
+
+      let denied = try makeServer(root: root, decision: false).dispatch(request: RequestEnvelope(
+        requestId: "\(command)-denied",
+        command: command,
+        payload: ["url": "https://example.com"]
+      ))
+      XCTAssertEqual(denied.ok, false, command)
+      XCTAssertEqual(denied.code, 1, command)
+      XCTAssertEqual(denied.error, "User denied the APW login request.", command)
+    }
+  }
   func testDoctorPayloadDoesNotAdvertiseAmbientAutoApproveEscapeHatch() throws {
     let root = URL(fileURLWithPath: NSTemporaryDirectory())
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -162,8 +295,10 @@ final class BrokerCoreTests: XCTestCase {
 
     let payload = server.doctorPayload()
     let guidance = payload["guidance"] as? [String]
+    let broker = payload["broker"] as? [String: Any]
 
     XCTAssertNotNil(guidance)
     XCTAssertFalse(guidance?.contains(where: { $0.contains("APW_NATIVE_APP_AUTO_APPROVE") }) ?? true)
+    XCTAssertEqual(broker?["requestTimeoutSeconds"] as? TimeInterval, 3)
   }
 }

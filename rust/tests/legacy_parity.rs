@@ -243,6 +243,30 @@ fn parity_status_output_with_no_session_is_shape_compatible() {
 }
 
 #[test]
+fn legacy_daemon_commands_emit_deprecation_warning() {
+    run_with_temp_home(|home| {
+        for args in [
+            &["auth", "logout"][..],
+            &["pw", "list", "bad host"][..],
+            &["otp", "list", "bad host"][..],
+            &["start", "--dry-run"][..],
+        ] {
+            let output = run_rust_cli(home, args);
+            assert!(
+                output.stderr.contains("legacy daemon path"),
+                "{args:?} did not emit deprecation warning: {:?}",
+                output.stderr
+            );
+            assert!(
+                output.stderr.contains("v2.1.0"),
+                "{args:?} did not include removal milestone: {:?}",
+                output.stderr
+            );
+        }
+    });
+}
+
+#[test]
 #[serial]
 fn parity_auth_request_shape_matches_legacy() {
     if !has_deno() {
