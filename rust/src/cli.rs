@@ -287,7 +287,13 @@ pub enum AppSubcommand {
 }
 
 #[derive(Args, Default)]
-pub struct DoctorCommand {}
+pub struct DoctorCommand {
+    /// Emit only the structured environment-check array. Useful for CI
+    /// jobs that want to grep `[FAIL]` lines or parse the JSON shape.
+    /// See issue #12.
+    #[arg(long)]
+    pub ci: bool,
+}
 
 #[derive(Args)]
 pub struct LoginCommand {
@@ -305,6 +311,9 @@ pub struct FillCommand {
 }
 
 #[derive(Args)]
+#[command(
+    long_about = "DEPRECATED: `apw auth` is part of the legacy daemon path and will be removed in v2.1.0. See docs/MIGRATION_AND_PARITY.md."
+)]
 pub struct AuthCommand {
     #[command(subcommand)]
     pub command: Option<AuthSubcommand>,
@@ -353,6 +362,9 @@ pub struct HostDoctorArgs {
 }
 
 #[derive(Args)]
+#[command(
+    long_about = "DEPRECATED: `apw pw` is part of the legacy daemon path and will be removed in v2.1.0. Use `apw login`/`apw fill` for the v2 broker. See docs/MIGRATION_AND_PARITY.md."
+)]
 pub struct PwCommand {
     #[command(subcommand)]
     pub action: Option<PwAction>,
@@ -371,6 +383,9 @@ pub enum PwAction {
 }
 
 #[derive(Args)]
+#[command(
+    long_about = "DEPRECATED: `apw otp` is part of the legacy daemon path and will be removed in v2.1.0. See docs/MIGRATION_AND_PARITY.md."
+)]
 pub struct OtpCommand {
     #[command(subcommand)]
     pub action: Option<OtpAction>,
@@ -383,6 +398,9 @@ pub enum OtpAction {
 }
 
 #[derive(Args)]
+#[command(
+    long_about = "DEPRECATED: `apw start` launches the legacy WebSocket daemon and will be removed in v2.1.0. The v2 broker runs as a per-user app under `apw app launch`. See docs/MIGRATION_AND_PARITY.md."
+)]
 pub struct StartCommand {
     #[arg(short, long, default_value_t = 0)]
     pub port: u16,
@@ -439,9 +457,31 @@ fn run_app(args: AppCommand, cli_json: bool) -> Result<(), APWError> {
     Ok(())
 }
 
-fn run_doctor(_args: DoctorCommand, cli_json: bool) -> Result<(), APWError> {
+fn run_doctor(args: DoctorCommand, cli_json: bool) -> Result<(), APWError> {
     logging::info("doctor", "collecting native app diagnostics");
-    let payload = native_app_doctor()?;
+    let environment = crate::doctor::run_environment_checks();
+    let environment_json = crate::doctor::checks_to_json(&environment);
+
+    if args.ci {
+        // CI mode always emits the structured envelope so downstream
+        // tooling can parse `[FAIL]` deterministically.
+        print_output(&environment_json, Status::Success, true);
+        return Ok(());
+    }
+
+    let mut payload = native_app_doctor()?;
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("environment".to_string(), environment_json);
+    }
+
+    if !cli_json {
+        // Surface the human-readable check lines on stderr so the
+        // existing JSON-on-stdout payload stays parseable.
+        for line in crate::doctor::render_check_lines(&environment) {
+            eprintln!("{line}");
+        }
+    }
+
     print_output(&payload, Status::Success, cli_json);
     Ok(())
 }
