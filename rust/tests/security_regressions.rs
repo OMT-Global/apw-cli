@@ -225,8 +225,15 @@ fn login_rejects_relative_external_provider_path() {
         install_native_app_no_results(home);
         write_fallback_provider_config(home, "bw");
 
-        let (status, stdout, stderr) =
-            run_command(home, &["--json", "login", "https://vault.example.com"]);
+        let (status, stdout, stderr) = run_command(
+            home,
+            &[
+                "--json",
+                "login",
+                "--external-fallback",
+                "https://vault.example.com",
+            ],
+        );
 
         assert_eq!(
             status, 102,
@@ -247,8 +254,15 @@ fn login_rejects_tilde_external_provider_path() {
         install_native_app_no_results(home);
         write_fallback_provider_config(home, "~/bin/bw");
 
-        let (status, stdout, stderr) =
-            run_command(home, &["--json", "login", "https://vault.example.com"]);
+        let (status, stdout, stderr) = run_command(
+            home,
+            &[
+                "--json",
+                "login",
+                "--external-fallback",
+                "https://vault.example.com",
+            ],
+        );
 
         assert_eq!(
             status, 102,
@@ -274,8 +288,15 @@ fn login_rejects_world_writable_external_provider_path() {
             .expect("failed to chmod fallback provider");
         write_fallback_provider_config(home, &provider_path.display().to_string());
 
-        let (status, stdout, stderr) =
-            run_command(home, &["--json", "login", "https://vault.example.com"]);
+        let (status, stdout, stderr) = run_command(
+            home,
+            &[
+                "--json",
+                "login",
+                "--external-fallback",
+                "https://vault.example.com",
+            ],
+        );
 
         assert_eq!(
             status, 102,
@@ -303,8 +324,15 @@ fn login_rejects_external_provider_symlink_to_insecure_target() {
         symlink(&provider_path, &provider_link).expect("failed to create provider symlink");
         write_fallback_provider_config(home, &provider_link.display().to_string());
 
-        let (status, stdout, stderr) =
-            run_command(home, &["--json", "login", "https://vault.example.com"]);
+        let (status, stdout, stderr) = run_command(
+            home,
+            &[
+                "--json",
+                "login",
+                "--external-fallback",
+                "https://vault.example.com",
+            ],
+        );
 
         assert_eq!(
             status, 102,

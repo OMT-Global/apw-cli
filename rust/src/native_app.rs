@@ -1,7 +1,7 @@
 use crate::error::{APWError, Result};
 use crate::logging;
 use crate::types::{ExternalFallbackProvider, Status, MAX_MESSAGE_BYTES, VERSION};
-use crate::utils::{read_config_file, validate_external_provider_path};
+use crate::utils::{read_config_file, read_config_file_or_empty, validate_external_provider_path};
 use serde_json::{json, Value};
 use std::env;
 use std::fs;

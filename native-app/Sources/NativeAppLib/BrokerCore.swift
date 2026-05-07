@@ -6,10 +6,51 @@ import Foundation
 private let runtimeDirectoryMode: mode_t = 0o700
 private let statusFileMode: mode_t = 0o600
 private let maxBrokerBytes = 32 * 1024
-private let brokerRequestTimeoutSeconds: TimeInterval = 3
 private let appSocketName = "broker.sock"
 private let statusFileName = "status.json"
 private let credentialsFileName = "credentials.json"
+
+/// Wall-clock timeout for a single broker IPC exchange (read or write half)
+/// between the Swift app broker and the Rust CLI. The Rust client mirrors
+/// this constant in `native_app.rs` as `BROKER_REQUEST_TIMEOUT_MS`. When
+/// the timeout fires, the broker drops the connection rather than blocking
+/// indefinitely on a hung peer. See issue #2.
+let brokerRequestTimeoutMs: Int = 3_000
+
+/// Map a `BrokerErrorCode` to the integer status code used in the wire
+/// envelope so the Rust CLI's typed `Status` enum stays stable. See
+/// issue #13.
+func brokerStatus(for code: BrokerErrorCode) -> Int {
+  switch code {
+  case .canceled, .failed, .unknown:
+    return 1  // GenericError
+  case .invalidResponse:
+    return 104  // ProtoInvalidResponse
+  case .notHandled, .unsupportedDomain, .noCredentialSource:
+    return 3  // NoResults
+  }
+}
+
+/// Factory for the default credential broker. Returns the
+/// AuthenticationServices implementation when the framework is
+/// available, otherwise nil so callers can fall back to demo or
+/// external providers. See issue #13.
+func defaultCredentialBroker() -> CredentialBroker? {
+  #if canImport(AuthenticationServices)
+    return AppleAuthenticationServicesBroker()
+  #else
+    return nil
+  #endif
+}
+
+/// Environment variable that opts the broker into the demo bootstrap path.
+/// When unset, the broker never materializes a plaintext credentials file
+/// and returns `no_credential_source` for login requests. See issue #14.
+let demoEnvVar = "APW_DEMO"
+
+func demoModeEnabled() -> Bool {
+  ProcessInfo.processInfo.environment[demoEnvVar] == "1"
+}
 protocol ApprovalPrompter {
   func prompt(url: String, username: String) -> Bool
 }
@@ -138,10 +179,16 @@ final class BrokerServer {
   private let paths: AppPaths
   private let startedAt = ISO8601DateFormatter().string(from: Date())
   private let approvalPrompter: ApprovalPrompter
+  private let credentialBroker: CredentialBroker?
 
-  init(paths: AppPaths, approvalPrompter: ApprovalPrompter = SystemApprovalPrompter()) {
+  init(
+    paths: AppPaths,
+    approvalPrompter: ApprovalPrompter = SystemApprovalPrompter(),
+    credentialBroker: CredentialBroker? = defaultCredentialBroker()
+  ) {
     self.paths = paths
     self.approvalPrompter = approvalPrompter
+    self.credentialBroker = credentialBroker
   }
 
   func run() throws -> Never {
@@ -165,6 +212,16 @@ final class BrokerServer {
       if client < 0 {
         continue
       }
+
+      // Bound the lifetime of any single broker exchange. A peer that stops
+      // sending or stops draining must not block the broker forever. See
+      // issue #2 / `brokerRequestTimeoutMs`.
+      var tv = timeval(
+        tv_sec: brokerRequestTimeoutMs / 1000,
+        tv_usec: __darwin_suseconds_t((brokerRequestTimeoutMs % 1000) * 1000)
+      )
+      setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+      setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
 
       autoreleasepool {
         let handle = FileHandle(fileDescriptor: client, closeOnDealloc: true)
@@ -223,9 +280,9 @@ final class BrokerServer {
         error: nil,
         requestId: request.requestId
       )
-    case "login", "fill":
+    case "login":
       let url = request.payload?["url"] ?? ""
-      return try credentialResponse(for: url, intent: request.command, requestId: request.requestId)
+      return try loginResponse(for: url, requestId: request.requestId)
     default:
       return ResponseEnvelope(
         ok: false,
@@ -246,7 +303,6 @@ final class BrokerServer {
       "socketPath": paths.socketPath.path,
       "supportedDomains": supportedDomains(),
       "authenticationServicesLinked": true,
-      "requestTimeoutSeconds": brokerRequestTimeoutSeconds,
     ]
   }
 
@@ -265,29 +321,66 @@ final class BrokerServer {
     ]
   }
 
-  private func credentialResponse(
-    for rawURL: String,
-    intent: String,
-    requestId: String?
-  ) throws -> ResponseEnvelope {
+  private func loginResponse(for rawURL: String, requestId: String?) throws -> ResponseEnvelope {
     guard let url = URL(string: rawURL), let host = url.host?.lowercased(), !host.isEmpty else {
       return ResponseEnvelope(
         ok: false,
         code: 1,
         payload: nil,
-        error: "Invalid URL for native app credential request.",
+        error: "Invalid URL for native app login.",
         requestId: requestId
       )
     }
 
-    guard url.scheme?.lowercased() == "https" else {
-      return ResponseEnvelope(
-        ok: false,
-        code: 1,
-        payload: nil,
-        error: "Native app credential requests require https URLs.",
-        requestId: requestId
-      )
+    // Non-demo path: route through the AuthenticationServices broker
+    // (issue #13). When no broker is wired (e.g. older macOS, missing
+    // entitlement) we surface a typed `no_credential_source` error so
+    // the CLI can fall back to an external provider.
+    if !demoModeEnabled() {
+      guard let broker = credentialBroker else {
+        return ResponseEnvelope(
+          ok: false,
+          code: 3,
+          payload: nil,
+          error:
+            "no_credential_source: the AuthenticationServices broker is not wired in this build. Set APW_DEMO=1 for the bootstrap path, or configure a fallback provider in ~/.apw/config.json.",
+          requestId: requestId
+        )
+      }
+      switch broker.login(url: rawURL) {
+      case .success(let credential):
+        return ResponseEnvelope(
+          ok: true,
+          code: 0,
+          payload: [
+            "status": AnyCodable("approved"),
+            "url": AnyCodable(credential.url),
+            "domain": AnyCodable(credential.domain),
+            "username": AnyCodable(credential.username),
+            "password": AnyCodable(credential.password),
+            "transport": AnyCodable("authentication_services"),
+            "userMediated": AnyCodable(true),
+          ],
+          error: nil,
+          requestId: requestId
+        )
+      case .denied:
+        return ResponseEnvelope(
+          ok: false,
+          code: 1,
+          payload: nil,
+          error: "User denied the APW login request.",
+          requestId: requestId
+        )
+      case .failure(let code, let message):
+        return ResponseEnvelope(
+          ok: false,
+          code: brokerStatus(for: code),
+          payload: nil,
+          error: "\(code.rawValue): \(message)",
+          requestId: requestId
+        )
+      }
     }
 
     guard host == "example.com" else {
@@ -295,7 +388,7 @@ final class BrokerServer {
         ok: false,
         code: 3,
         payload: nil,
-        error: "The APW v2 bootstrap app currently supports only https://example.com.",
+        error: "The APW_DEMO bootstrap path supports only https://example.com.",
         requestId: requestId
       )
     }
@@ -328,7 +421,6 @@ final class BrokerServer {
       code: 0,
       payload: [
         "status": AnyCodable("approved"),
-        "intent": AnyCodable(intent),
         "url": AnyCodable(credential.url),
         "domain": AnyCodable(credential.domain),
         "username": AnyCodable(credential.username),
@@ -342,7 +434,8 @@ final class BrokerServer {
   }
 
   private func supportedDomains() -> [String] {
-    (try? loadCredentials().domains) ?? ["example.com"]
+    guard demoModeEnabled() else { return [] }
+    return (try? loadCredentials().domains) ?? ["example.com"]
   }
 
   func loadCredentials() throws -> CredentialsFile {
@@ -364,10 +457,10 @@ final class BrokerServer {
   }
 
   func ensureCredentialsFile() throws {
-    guard !FileManager.default.fileExists(atPath: paths.credentialsPath.path) else {
+    guard demoModeEnabled() else {
       return
     }
-    guard ProcessInfo.processInfo.environment["APW_DEMO"] == "1" else {
+    guard !FileManager.default.fileExists(atPath: paths.credentialsPath.path) else {
       return
     }
     let content = CredentialsFile(
@@ -386,8 +479,8 @@ final class BrokerServer {
     try data.write(to: paths.credentialsPath, options: [.atomic])
     chmod(paths.credentialsPath.path, statusFileMode)
     fputs(
-      "apw: info: created demo credentials file at \(paths.credentialsPath.path). "
-        + "This file contains placeholder credentials — replace them with real entries before use.\n",
+      "apw: warn: APW_DEMO=1 set; wrote placeholder credentials to \(paths.credentialsPath.path). "
+        + "Disable APW_DEMO before shipping.\n",
       stderr)
   }
 

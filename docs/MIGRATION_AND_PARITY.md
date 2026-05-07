@@ -15,6 +15,23 @@ Release reference version: `v2.0.0`
 - Legacy daemon commands (`apw start`, `apw auth`, `apw pw`, and `apw otp`)
   emit runtime deprecation warnings and are targeted for removal in `v2.1.0`.
 
+## Planned removals
+
+The following CLI subcommands are part of the legacy daemon path and are
+scheduled for removal in **v2.1.0**. As of `v2.0.0` they emit a one-line
+stderr deprecation warning at startup (suppressed in `--json` mode) and
+their `--help` output is prefixed with a `DEPRECATED:` banner. (issue #9)
+
+| Subcommand   | Replacement                  |
+| ------------ | ---------------------------- |
+| `apw start`  | `apw app launch`             |
+| `apw pw`     | `apw login` / `apw fill`     |
+| `apw otp`    | (no v2 replacement planned)  |
+| `apw auth`   | (no v2 replacement; v2 broker is app-mediated) |
+
+Operators with scripts pinned to these commands should migrate before
+upgrading to v2.1.0.
+
 Archive rules: [ARCHIVE_POLICY.md](ARCHIVE_POLICY.md)
 
 ## Parity target
