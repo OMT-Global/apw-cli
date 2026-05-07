@@ -227,7 +227,12 @@ fn login_rejects_relative_external_provider_path() {
 
         let (status, stdout, stderr) = run_command(
             home,
-            &["--json", "login", "--external-fallback", "https://vault.example.com"],
+            &[
+                "--json",
+                "login",
+                "--external-fallback",
+                "https://vault.example.com",
+            ],
         );
 
         assert_eq!(
@@ -251,7 +256,12 @@ fn login_rejects_tilde_external_provider_path() {
 
         let (status, stdout, stderr) = run_command(
             home,
-            &["--json", "login", "--external-fallback", "https://vault.example.com"],
+            &[
+                "--json",
+                "login",
+                "--external-fallback",
+                "https://vault.example.com",
+            ],
         );
 
         assert_eq!(
@@ -280,7 +290,12 @@ fn login_rejects_world_writable_external_provider_path() {
 
         let (status, stdout, stderr) = run_command(
             home,
-            &["--json", "login", "--external-fallback", "https://vault.example.com"],
+            &[
+                "--json",
+                "login",
+                "--external-fallback",
+                "https://vault.example.com",
+            ],
         );
 
         assert_eq!(
@@ -311,7 +326,12 @@ fn login_rejects_external_provider_symlink_to_insecure_target() {
 
         let (status, stdout, stderr) = run_command(
             home,
-            &["--json", "login", "--external-fallback", "https://vault.example.com"],
+            &[
+                "--json",
+                "login",
+                "--external-fallback",
+                "https://vault.example.com",
+            ],
         );
 
         assert_eq!(
