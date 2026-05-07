@@ -94,7 +94,13 @@ def login_payload(raw_url, transport):
         return {
             "ok": False,
             "code": 1,
-            "error": "Invalid URL for native app login.",
+            "error": "Invalid URL for native app credential request.",
+        }
+    if parsed.scheme.lower() != "https":
+        return {
+            "ok": False,
+            "code": 1,
+            "error": "Native app credential requests require https URLs.",
         }
     if host != "example.com":
         return {
@@ -316,12 +322,20 @@ impl Drop for NativeAppFixture {
 }
 
 fn create_fake_bundle(workspace: &Path) {
-    let bundle = workspace
+    let contents = workspace
         .join("native-app")
         .join("dist")
         .join("APW.app")
         .join("Contents");
-    let macos = bundle.join("MacOS");
+    create_fake_bundle_contents(&contents);
+}
+
+fn create_fake_archive_bundle(workspace: &Path) {
+    create_fake_bundle_contents(&workspace.join("APW.app").join("Contents"));
+}
+
+fn create_fake_bundle_contents(contents: &Path) {
+    let macos = contents.join("MacOS");
     fs::create_dir_all(&macos).expect("failed to create fake app bundle");
 
     let executable = macos.join("APW");
@@ -332,7 +346,7 @@ fn create_fake_bundle(workspace: &Path) {
     permissions.set_mode(0o755);
     fs::set_permissions(&executable, permissions).expect("failed to chmod fake app executable");
 
-    let info_plist = bundle.join("Info.plist");
+    let info_plist = contents.join("Info.plist");
     fs::write(
         info_plist,
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -432,6 +446,7 @@ fn wait_for_socket_transport(fixture: &NativeAppFixture) -> Value {
 #[serial]
 fn doctor_bootstraps_runtime_without_installed_bundle() {
     let fixture = NativeAppFixture::new();
+    let credentials_path = fixture.home().join(".apw/native-app/credentials.json");
 
     let output = run_apw(&fixture, &["--json", "doctor"], &[]);
     assert_eq!(output.status, 0, "{output:#?}");
@@ -443,23 +458,11 @@ fn doctor_bootstraps_runtime_without_installed_bundle() {
         payload["payload"]["frameworks"]["authenticationServicesLinked"],
         true
     );
-    assert!(
-        !fixture
-            .home()
-            .join(".apw/native-app/credentials.json")
-            .exists(),
-        "credentials.json must not be materialized without APW_DEMO=1 (issue #14)"
-    );
+    assert!(!credentials_path.exists());
 
     let demo_output = run_apw(&fixture, &["--json", "doctor"], &[("APW_DEMO", "1")]);
     assert_eq!(demo_output.status, 0, "{demo_output:#?}");
-    assert!(
-        fixture
-            .home()
-            .join(".apw/native-app/credentials.json")
-            .exists(),
-        "credentials.json should be materialized when APW_DEMO=1 is set"
-    );
+    assert!(credentials_path.exists());
 }
 
 #[test]
@@ -486,6 +489,43 @@ fn app_install_copies_packaged_bundle_and_updates_status() {
         status_payload["payload"]["app"]["service"]["running"],
         false
     );
+}
+
+#[test]
+#[serial]
+fn app_install_finds_release_archive_sibling_bundle() {
+    let home = TempDir::new().expect("failed to create temp home");
+    let archive = TempDir::new().expect("failed to create temp archive");
+    let archive_apw = archive.path().join("apw");
+    fs::copy(apw_path(), &archive_apw).expect("failed to copy apw binary into archive fixture");
+    let mut permissions = fs::metadata(&archive_apw)
+        .expect("failed to stat copied apw binary")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&archive_apw, permissions).expect("failed to chmod copied apw binary");
+    create_fake_archive_bundle(archive.path());
+
+    let output = Command::new(&archive_apw)
+        .current_dir(archive.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .args(["--json", "app", "install"])
+        .output()
+        .expect("failed to run apw app install from archive fixture");
+    let install = CommandOutput {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+    };
+    assert_eq!(install.status, 0, "{install:#?}");
+
+    let payload = parse_success(&install);
+    assert_eq!(payload["payload"]["status"], "installed");
+    assert_eq!(payload["payload"]["version"], "2.0.0");
+    assert!(home
+        .path()
+        .join(".apw/native-app/installed/APW.app/Contents/MacOS/APW")
+        .exists());
 }
 
 #[test]
@@ -617,6 +657,25 @@ fn login_reports_operator_facing_failures() {
         .as_str()
         .unwrap_or_default()
         .contains("User denied"));
+}
+
+#[test]
+#[serial]
+fn native_credential_commands_reject_non_https_urls() {
+    let fixture = NativeAppFixture::new();
+
+    let install = run_apw(&fixture, &["--json", "app", "install"], &[]);
+    assert_eq!(install.status, 0, "{install:#?}");
+
+    for command in ["login", "fill"] {
+        let result = run_apw(&fixture, &["--json", command, "ftp://example.com"], &[]);
+        assert_eq!(result.status, 2, "{result:#?}");
+        let payload = parse_error(&result);
+        assert!(payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("require an https URL"));
+    }
 }
 
 #[test]

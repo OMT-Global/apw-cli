@@ -1,4 +1,4 @@
-version: 1
+version: 2
 project:
   name: apw-cli
   description: A CLI for Apple Passwords (also known as iCloud Keychain)
@@ -6,6 +6,7 @@ project:
   owner: OMT-Global
   defaultBranch: main
 repo:
+  class: library
   managedPaths:
     - project.bootstrap.yaml
     - AGENTS.md
@@ -22,9 +23,24 @@ repo:
     - scripts/claude-cloud/**
     - scripts/claude/**
     - docs/bootstrap/**
+  docs:
+    readme: true
+    contributing: false
+    security: false
+  templates:
+    pullRequest: standard
+    issueTemplates:
+      - bug
+      - feature
+  env:
+    exampleFile: false
+    strategy: optional
+  hooks:
+    preCommit: standard
+    prePush: none
 archetype:
   kind: generic-empty
-  packageManager: none
+  packageManager: npm
   moduleName: apw
 github:
   createRepo: false
@@ -51,7 +67,11 @@ github:
     hasProjects: false
     hasWiki: false
     hasDiscussions: false
+  security:
+    dependabot: false
+    secretScanningHints: true
 ci:
+  policy: standard-public
   runnerPolicy: hybrid-safe
   nodeVersion: "20"
   pythonVersion: "3.12"
@@ -60,6 +80,14 @@ ci:
   extendedChecks:
     - template-review
   nightlyCron: 0 7 * * *
+  workflows:
+    prFastCi: true
+    extendedValidation: true
+    claude: true
+    pagesDeploy: false
+    ci: false
+    extras: []
+  additionalWorkflows: []
 agents:
   manageCodexHome: true
   manageClaudeHome: true
@@ -69,6 +97,18 @@ agents:
   enableClaudeDevcontainer: true
   enableClaudeGitHubAction: true
   sharedSkills: []
+capabilities:
+  pages:
+    enabled: false
+    provider: cloudflare-pages
+    outputDir: dist
+  release:
+    enabled: false
+    kind: none
+  docsPublish:
+    enabled: false
+  containers:
+    enabled: false
 environments:
   dev:
     reviewers: []

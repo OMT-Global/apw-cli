@@ -13,53 +13,35 @@ Release reference version: `v2.0.0`
 - legacy runtime config lives in `~/.apw/config.json`
 - the v2 app broker uses `~/.apw/native-app/`
 - `~/.apw` is created with mode `0700`
-- config, status, and bootstrap credential files are written with mode `0600`
+- config and status files are written with mode `0600`; plaintext bootstrap
+  credential files are never persisted by default
+- demo bootstrap credentials are written only when `APW_DEMO=1` is explicitly
+  set for bootstrap tests
 - legacy session secret material is kept in the user keychain when the `v1.x`
   compatibility path is used
-- the plaintext demo credentials file (`~/.apw/native-app/credentials.json`) is
-  **never** materialized by default. Set `APW_DEMO=1` before `apw app install`
-  / `apw app launch` to opt into the bundled `example.com` bootstrap
-  credential. Without `APW_DEMO`, `apw login` returns
-  `no_credential_source` for the demo domain. (issue #14)
-- external CLI fallback is opt-in via `fallbackProvider` +
-  `fallbackProviderPath`, requires an absolute executable path that:
-  - is not `~`-prefixed
-  - resolves via `fs::canonicalize` (symlinks followed)
-  - is a regular file owned by the current effective uid
-  - has the execute bit set and is **not** world-writable
-  Validation failures surface as typed `InvalidConfig` errors. (issue #1)
-- external fallback exec is bounded:
-  - per-invocation wall-clock timeout `APW_FALLBACK_TIMEOUT_MS`
-    (default 15000)
-  - per-process invocation cap `APW_FALLBACK_INVOCATION_LIMIT` (default 5)
-  - Timeouts kill the child via `SIGKILL` and return
-    `CommunicationTimeout`; rate-limit breaches return a typed
-    `GenericError` without crashing. (issue #3)
+- external CLI fallback requires both configuration (`fallbackProvider` +
+  `fallbackProviderPath`) and an explicit `apw login --external-fallback <url>`
+  invocation, requires an absolute executable path, marks JSON output as
+  `transport: "external_cli"` / `securityMode: "reduced_external_cli"`, and does
+  not cache returned credentials
 
 ### Runtime broker hardening
 
 - the v2 app broker uses a same-user local UNIX socket under `~/.apw/native-app/`
 - `status --json` exposes app/broker readiness while retaining legacy daemon diagnostics
 - requests and responses use typed JSON envelopes with bounded payload sizes
-- bootstrap credentials are stored in a local runtime file for the supported demo domain only
+- bootstrap credentials are read from a local runtime file for the supported
+  demo domain only; the app does not create that plaintext file on default
+  launch
 
 ### Timeouts and failure modes
 
-A single broker IPC exchange between the Rust CLI and the Swift broker is
-bounded on both halves of the connection by a shared timeout. (issue #2)
-
-| Side  | Constant                       | Value          | Behavior on timeout                                |
-| ----- | ------------------------------ | -------------- | -------------------------------------------------- |
-| Rust  | `BROKER_REQUEST_TIMEOUT_MS`    | 3000 ms        | `send_request` returns `Status::CommunicationTimeout`; CLI exits non-zero, no credential leak |
-| Swift | `brokerRequestTimeoutMs`       | 3000 ms        | per-connection `SO_RCVTIMEO`/`SO_SNDTIMEO`; broker drops the client and continues serving         |
-
-External fallback exec is bounded separately by
-`APW_FALLBACK_TIMEOUT_MS` (default 15000 ms; see issue #3).
-
-A regression test in `rust/src/native_app.rs`
-(`broker_request_times_out_when_peer_never_replies`) parks a Unix-socket
-acceptor that never replies and asserts the CLI aborts within
-`BROKER_REQUEST_TIMEOUT_MS + 1s`.
+- native app UNIX-socket requests use a `3s` read/write timeout
+- a hung broker socket returns a non-zero `CommunicationTimeout` error instead
+  of blocking the CLI indefinitely
+- direct executable fallback responses are still bounded by the same maximum
+  response size before JSON decoding
+- timed-out requests do not cache or persist partially returned credentials
 
 ## Required release gates
 
@@ -84,7 +66,8 @@ The Rust test suite covers:
 - stable JSON status shape
 - launch failure precedence over session errors
 - malformed or oversized payload rejection
-- native app diagnostics and bootstrap credential file initialization
+- native app socket timeout handling
+- native app diagnostics and `APW_DEMO=1` bootstrap credential file initialization
 - end-to-end v2 app install, launch, status, doctor, and login flows
 - direct-exec fallback, unsupported-domain handling, denial handling, and malformed broker response mapping
 

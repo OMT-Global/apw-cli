@@ -15,6 +15,8 @@ use rpassword::prompt_password;
 use serde_json::json;
 use std::io::{self, Write};
 
+const LEGACY_DAEMON_DEPRECATION_WARNING: &str = "This command uses the legacy daemon path and will be removed in v2.1.0. Use the native app broker flow instead; see docs/MIGRATION_AND_PARITY.md.";
+
 fn read_prompt(prompt: &str) -> Result<String, APWError> {
     print!("{prompt}");
     io::stdout().flush().map_err(|error| {
@@ -87,6 +89,23 @@ fn sanitize_url(raw: &str) -> Result<String, APWError> {
         ));
     }
 
+    Ok(candidate)
+}
+
+fn sanitize_native_credential_url(raw: &str) -> Result<String, APWError> {
+    let candidate = sanitize_url(raw)?;
+    let parsed = url::Url::parse(&candidate).map_err(|_| {
+        APWError::new(
+            Status::InvalidParam,
+            format!("Invalid native credential URL: '{candidate}'"),
+        )
+    })?;
+    if parsed.scheme() != "https" {
+        return Err(APWError::new(
+            Status::InvalidParam,
+            "Native credential requests require an https URL.",
+        ));
+    }
     Ok(candidate)
 }
 
@@ -171,6 +190,10 @@ fn print_status(payload: serde_json::Value, json_output: bool) {
     print_output(&payload, Status::Success, json_output);
 }
 
+fn warn_legacy_daemon_path(command: &str) {
+    logging::warn(command, LEGACY_DAEMON_DEPRECATION_WARNING);
+}
+
 fn parse_pin_prompt(optional: Option<String>) -> Result<String, APWError> {
     if let Some(pin) = optional {
         return normalize_pin(pin);
@@ -227,13 +250,25 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     App(AppCommand),
+    #[command(
+        long_about = "This command uses the legacy daemon path and will be removed in v2.1.0. Use the native app broker flow instead; see docs/MIGRATION_AND_PARITY.md."
+    )]
     Auth(AuthCommand),
     Doctor(DoctorCommand),
     Fill(FillCommand),
     Host(HostCommand),
     Login(LoginCommand),
+    #[command(
+        long_about = "This command uses the legacy daemon path and will be removed in v2.1.0. Use `apw login <url>` through the native app broker instead; see docs/MIGRATION_AND_PARITY.md."
+    )]
     Pw(PwCommand),
+    #[command(
+        long_about = "This command uses the legacy daemon path and will be removed in v2.1.0. OTP parity is retained only for migration; see docs/MIGRATION_AND_PARITY.md."
+    )]
     Otp(OtpCommand),
+    #[command(
+        long_about = "This command starts the legacy daemon path and will be removed in v2.1.0. Use `apw app launch` for the native app broker instead; see docs/MIGRATION_AND_PARITY.md."
+    )]
     Start(StartCommand),
     Status(StatusCommand),
     Version(VersionCommand),
@@ -263,6 +298,11 @@ pub struct DoctorCommand {
 #[derive(Args)]
 pub struct LoginCommand {
     pub url: String,
+    #[arg(
+        long = "external-fallback",
+        help = "Explicitly allow reduced-security external password-manager CLI fallback when the native broker is unavailable or returns no results."
+    )]
+    pub external_fallback: bool,
 }
 
 #[derive(Args)]
@@ -451,14 +491,17 @@ fn run_fill(args: FillCommand, cli_json: bool) -> Result<(), APWError> {
         "fill",
         format!("requesting fill credential for {}", args.url),
     );
-    let payload = native_app_fill(&sanitize_url(&args.url)?)?;
+    let payload = native_app_fill(&sanitize_native_credential_url(&args.url)?)?;
     print_output(&payload, Status::Success, cli_json);
     Ok(())
 }
 
 fn run_login(args: LoginCommand, cli_json: bool) -> Result<(), APWError> {
     logging::info("login", format!("requesting credential for {}", args.url));
-    let payload = native_app_login(&sanitize_url(&args.url)?)?;
+    let payload = native_app_login(
+        &sanitize_native_credential_url(&args.url)?,
+        args.external_fallback,
+    )?;
     print_output(&payload, Status::Success, cli_json);
     Ok(())
 }
@@ -722,20 +765,6 @@ fn validate_semver_identifiers(
     Ok(())
 }
 
-/// Emit a one-line stderr warning for legacy daemon-routed commands so that
-/// scripts pinned to v1 paths can be migrated before the daemon is removed.
-/// Suppressed in `--json` mode to avoid polluting machine-readable output;
-/// the JSON envelope already exposes `releaseLine` for migration signals.
-/// See issue #9.
-fn warn_legacy_daemon_path(command_name: &str) {
-    logging::warn(
-        "deprecated",
-        format!(
-            "`apw {command_name}` uses the legacy daemon path and will be removed in a future release. See docs/MIGRATION_AND_PARITY.md."
-        ),
-    );
-}
-
 fn parse_runtime_mode(raw: &str) -> std::result::Result<RuntimeMode, String> {
     let normalized = raw.trim().to_lowercase();
     Ok(match normalized.as_str() {
@@ -757,7 +786,7 @@ fn parse_runtime_mode(raw: &str) -> std::result::Result<RuntimeMode, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
     use rand::{thread_rng, Rng};
 
     #[test]
@@ -790,6 +819,20 @@ mod tests {
     }
 
     #[test]
+    fn native_credential_urls_must_be_https() {
+        assert_eq!(
+            sanitize_native_credential_url("example.com").unwrap(),
+            "https://example.com"
+        );
+        assert_eq!(
+            sanitize_native_credential_url("https://example.com/login").unwrap(),
+            "https://example.com/login"
+        );
+        assert!(sanitize_native_credential_url("http://example.com").is_err());
+        assert!(sanitize_native_credential_url("ftp://example.com").is_err());
+    }
+
+    #[test]
     fn parse_url_rejects_nulls_and_missing_host() {
         assert!(sanitize_url("   ").is_err());
         assert!(sanitize_url("http://\0evil").is_err());
@@ -800,6 +843,20 @@ mod tests {
     fn fill_subcommand_is_parsed() {
         let cli = Cli::parse_from(["apw", "fill", "example.com"]);
         assert!(matches!(cli.command, Commands::Fill(_)));
+    }
+
+    #[test]
+    fn legacy_daemon_help_mentions_deprecation() {
+        let mut command = Cli::command();
+        for name in ["auth", "pw", "otp", "start"] {
+            let help = command
+                .find_subcommand_mut(name)
+                .expect("legacy subcommand")
+                .render_long_help()
+                .to_string();
+            assert!(help.contains("legacy daemon path"), "{name} help: {help}");
+            assert!(help.contains("v2.1.0"), "{name} help: {help}");
+        }
     }
 
     #[test]

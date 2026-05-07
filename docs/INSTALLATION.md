@@ -45,28 +45,27 @@ cargo install --path rust --locked
 apw app install
 ```
 
-## Notarization
+## Install from a release archive
 
-When the release CI is fully wired with Apple credentials (issue #7),
-release tag builds:
+Release archives are named `apw-macos-vX.Y.Z.tar.gz` and contain:
 
-1. Sign the `.app` bundle with the configured Developer ID Application
-   certificate.
-2. Submit the signed bundle to Apple Notary Service via
-   `xcrun notarytool submit --wait`.
-3. Staple the notarization ticket to the bundle.
-4. Re-zip the stapled bundle and upload it as the GitHub Release asset
-   `APW-<tag>.zip` alongside the source tarball.
-
-When the required secrets are not configured, the workflow emits a
-`::warning::` and skips notarization. End users that hit Gatekeeper
-quarantine on an unnotarized build can run:
-
-```bash
-xattr -d com.apple.quarantine /Applications/APW.app
+```text
+apw
+APW.app/
 ```
 
-This manual fallback is interim until issue #7 is fully landed.
+Extract the archive and keep `apw` beside `APW.app` while installing the
+per-user app bundle:
+
+```bash
+tar -xzf apw-macos-vX.Y.Z.tar.gz
+./apw --version
+./apw status --json
+./apw app install
+```
+
+After `apw app install`, the CLI copies `APW.app` into
+`~/.apw/native-app/installed/APW.app`.
 
 ## Homebrew
 
@@ -89,20 +88,21 @@ This validates:
 
 ### Publish your own tap
 
-Use [`packaging/homebrew/apw.rb`](../packaging/homebrew/apw.rb)
-as the formula template, or render a release-pinned formula with the
-helper script:
+Use [`packaging/homebrew/apw.rb.template`](../packaging/homebrew/apw.rb.template)
+as the formula template. Render it with `scripts/render-homebrew-formula.sh <version> <sha256>`; the release workflow uses the same helper to open a draft PR against the Homebrew tap.
+
+Render the formula for the release tarball before opening the tap PR:
 
 ```bash
-./scripts/render-homebrew-formula.sh \
-  2.0.1 \
-  "$(curl -fsSL https://github.com/OMT-Global/apw/archive/refs/tags/v2.0.1.tar.gz | shasum -a 256 | awk '{print $1}')" \
-  > Formula/apw.rb
+version="2.0.0"
+sha256="$(curl -fsSL "https://github.com/OMT-Global/apw-cli/archive/refs/tags/v${version}.tar.gz" | shasum -a 256 | awk '{print $1}')"
+./scripts/render-homebrew-formula.sh "$version" "$sha256"
 ```
 
-The release workflow renders this automatically and opens a PR against
-the tap repository when `HOMEBREW_TAP_TOKEN` is set. Failures in the
-tap step do not block the release itself — see issue #6.
+Then copy `packaging/homebrew/apw.rb` into the tap as `Formula/apw.rb`,
+commit it, and open a tap pull request. Until tap publishing credentials are
+available to the release workflow, this manual PR is the supported publishing
+path.
 
 After installing with Homebrew, install the per-user APW app bundle:
 
@@ -142,35 +142,20 @@ Healthy v2 bootstrap state usually looks like:
 apw login https://example.com
 ```
 
-The default install does not materialize a demo credential. To exercise the
-bundled bootstrap credential for `https://example.com`, opt in explicitly:
+### External password manager fallback
 
-```bash
-APW_DEMO=1 apw app install
-APW_DEMO=1 apw app launch
-APW_DEMO=1 apw login https://example.com
-```
+When the native app broker cannot return a credential, APW can fall back to a
+configured external password manager CLI provider. The fallback executable path
+is security-sensitive and is validated before APW invokes it.
 
-Without `APW_DEMO=1`, `apw login` returns a typed `no_credential_source`
-error for the demo domain. The real
-`AuthenticationServices` broker is tracked in issue #13.
+`fallbackProviderPath` must follow these rules:
 
-### External fallback providers
-
-When a fallback provider is configured in `~/.apw/config.json`
-(`fallbackProvider` + `fallbackProviderPath`), the CLI validates the
-provider binary before each invocation:
-
-- the path must be absolute and must not start with `~`
-- the resolved file (after `realpath`) must be a regular file, owned by the
-  current user, with the execute bit set, and not world-writable
-
-Each invocation is bounded by:
-
-- `APW_FALLBACK_TIMEOUT_MS` (default 15000) — wall-clock timeout per exec;
-  the child is killed if it exceeds it
-- `APW_FALLBACK_INVOCATION_LIMIT` (default 5) — maximum invocations per
-  `apw` process before further calls are refused
+- Use an absolute path. Relative paths and `~` expansion are rejected.
+- Resolve through `realpath`/canonicalization. Symlinks are followed and the
+  resolved executable is the file APW invokes.
+- Resolve to a regular file owned by the current user.
+- Use `0755` permissions or more restrictive permissions. Group-writable,
+  world-writable, and special-mode executables are rejected.
 
 ## Diagnostics
 
