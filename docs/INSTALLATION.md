@@ -145,10 +145,21 @@ apw login https://example.com
 ### External password manager fallback
 
 When the native app broker cannot return a credential, APW can fall back to a
-configured external password manager CLI provider. The fallback executable path
-is security-sensitive and is validated before APW invokes it.
+configured external password manager CLI provider. The external CLI fallback is
+opt-in and only runs when explicitly enabled for the credential request.
+Configure it in `~/.apw/config.json` with an absolute executable path:
 
-`fallbackProviderPath` must follow these rules:
+```json
+{
+  "fallbackProvider": "bitwarden",
+  "fallbackProviderPath": "/opt/homebrew/bin/bw"
+}
+```
+
+Supported providers are `bitwarden` and `1password`.
+
+The fallback executable path is security-sensitive and is validated before APW
+invokes it. `fallbackProviderPath` must follow these rules:
 
 - Use an absolute path. Relative paths and `~` expansion are rejected.
 - Resolve through `realpath`/canonicalization. Symlinks are followed and the
@@ -156,6 +167,28 @@ is security-sensitive and is validated before APW invokes it.
 - Resolve to a regular file owned by the current user.
 - Use `0755` permissions or more restrictive permissions. Group-writable,
   world-writable, and special-mode executables are rejected.
+
+External provider executions are bounded by default:
+
+- `fallbackProviderTimeoutMs`: per-process timeout in milliseconds. Default:
+  `5000`. Values less than `1` fall back to the default. A timed-out provider
+  process is killed and the credential request fails with a clear timeout
+  error.
+- `fallbackProviderMaxInvocations`: maximum external provider process
+  invocations per APW session. Default: `10`. Set `0` to block external
+  provider invocations for the current session. When the limit is exceeded, APW
+  returns a clear error instead of executing the provider again.
+
+Example with explicit limits:
+
+```json
+{
+  "fallbackProvider": "1password",
+  "fallbackProviderPath": "/opt/homebrew/bin/op",
+  "fallbackProviderTimeoutMs": 3000,
+  "fallbackProviderMaxInvocations": 6
+}
+```
 
 ## Diagnostics
 

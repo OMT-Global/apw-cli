@@ -179,6 +179,20 @@ pub struct APWConfigV1 {
         skip_serializing_if = "Option::is_none"
     )]
     pub fallback_provider_path: Option<String>,
+    #[serde(
+        rename = "fallbackProviderTimeoutMs",
+        alias = "fallback_provider_timeout_ms",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub fallback_provider_timeout_ms: Option<u64>,
+    #[serde(
+        rename = "fallbackProviderMaxInvocations",
+        alias = "fallback_provider_max_invocations",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub fallback_provider_max_invocations: Option<u32>,
     #[serde(rename = "createdAt")]
     pub created_at: String,
 }
@@ -202,6 +216,8 @@ impl Default for APWConfigV1 {
             secret_source: Some(SecretSource::File),
             fallback_provider: None,
             fallback_provider_path: None,
+            fallback_provider_timeout_ms: None,
+            fallback_provider_max_invocations: None,
             created_at: Utc::now().to_rfc3339(),
         }
     }
@@ -267,6 +283,18 @@ pub struct APWRuntimeConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub fallback_provider_path: Option<String>,
+    #[serde(
+        rename = "fallbackProviderTimeoutMs",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub fallback_provider_timeout_ms: Option<u64>,
+    #[serde(
+        rename = "fallbackProviderMaxInvocations",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub fallback_provider_max_invocations: Option<u32>,
     #[serde(rename = "createdAt")]
     pub created_at: String,
 }
@@ -289,6 +317,8 @@ impl Default for APWRuntimeConfig {
             bridge_last_error: None,
             fallback_provider: None,
             fallback_provider_path: None,
+            fallback_provider_timeout_ms: None,
+            fallback_provider_max_invocations: None,
             created_at: Utc::now().to_rfc3339(),
         }
     }
