@@ -37,4 +37,6 @@ done < <(find .github/scripts scripts -type f -name '*.sh' -print0)
 
 ./scripts/test-render-homebrew-formula.sh
 
+python3 scripts/ci/verify-bootstrap-governance.py
+
 echo "APW fast checks passed."
