@@ -13,19 +13,26 @@ Release reference version: `v2.0.0`
 - legacy runtime config lives in `~/.apw/config.json`
 - the v2 app broker uses `~/.apw/native-app/`
 - `~/.apw` is created with mode `0700`
-- config, status, and bootstrap credential files are written with mode `0600`
+- config and status files are written with mode `0600`; plaintext bootstrap
+  credential files are never persisted by default
+- demo bootstrap credentials are written only when `APW_DEMO=1` is explicitly
+  set for bootstrap tests
 - legacy session secret material is kept in the user keychain when the `v1.x`
   compatibility path is used
-- external CLI fallback is opt-in via `fallbackProvider` +
-  `fallbackProviderPath`, requires an absolute executable path, and does not
-  cache returned credentials
+- external CLI fallback requires both configuration (`fallbackProvider` +
+  `fallbackProviderPath`) and an explicit `apw login --external-fallback <url>`
+  invocation, requires an absolute executable path, marks JSON output as
+  `transport: "external_cli"` / `securityMode: "reduced_external_cli"`, and does
+  not cache returned credentials
 
 ### Runtime broker hardening
 
 - the v2 app broker uses a same-user local UNIX socket under `~/.apw/native-app/`
 - `status --json` exposes app/broker readiness while retaining legacy daemon diagnostics
 - requests and responses use typed JSON envelopes with bounded payload sizes
-- bootstrap credentials are stored in a local runtime file for the supported demo domain only
+- bootstrap credentials are read from a local runtime file for the supported
+  demo domain only; the app does not create that plaintext file on default
+  launch
 
 ### Timeouts and failure modes
 
@@ -60,7 +67,7 @@ The Rust test suite covers:
 - launch failure precedence over session errors
 - malformed or oversized payload rejection
 - native app socket timeout handling
-- native app diagnostics and bootstrap credential file initialization
+- native app diagnostics and `APW_DEMO=1` bootstrap credential file initialization
 - end-to-end v2 app install, launch, status, doctor, and login flows
 - direct-exec fallback, unsupported-domain handling, denial handling, and malformed broker response mapping
 

@@ -363,8 +363,11 @@ final class BrokerServer {
     chmod(paths.runtimeRoot.path, runtimeDirectoryMode)
   }
 
-  private func ensureCredentialsFile() throws {
+  func ensureCredentialsFile() throws {
     guard !FileManager.default.fileExists(atPath: paths.credentialsPath.path) else {
+      return
+    }
+    guard ProcessInfo.processInfo.environment["APW_DEMO"] == "1" else {
       return
     }
     let content = CredentialsFile(

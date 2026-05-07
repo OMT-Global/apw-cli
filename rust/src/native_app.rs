@@ -1,7 +1,7 @@
 use crate::error::{APWError, Result};
 use crate::logging;
 use crate::types::{APWConfigV1, ExternalFallbackProvider, Status, MAX_MESSAGE_BYTES, VERSION};
-use crate::utils::read_config_file_or_empty;
+use crate::utils::{read_config_file, read_config_file_or_empty, validate_external_provider_path};
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
@@ -149,6 +149,7 @@ pub fn native_app_executable_in_bundle(bundle_path: &Path) -> PathBuf {
 fn resolve_packaged_native_app_bundle() -> Result<PathBuf> {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut candidates = vec![
+        cwd.join(NATIVE_APP_BUNDLE_NAME),
         cwd.join("native-app")
             .join("dist")
             .join(NATIVE_APP_BUNDLE_NAME),
@@ -162,6 +163,7 @@ fn resolve_packaged_native_app_bundle() -> Result<PathBuf> {
 
     if let Ok(exe) = env::current_exe() {
         if let Some(parent) = exe.parent() {
+            candidates.push(parent.join(NATIVE_APP_BUNDLE_NAME));
             candidates.push(
                 parent
                     .join("../libexec")
@@ -277,6 +279,9 @@ fn default_credentials_payload() -> Value {
 fn ensure_default_credentials_file() -> Result<()> {
     let path = native_app_credentials_path();
     if path.exists() {
+        return Ok(());
+    }
+    if env::var("APW_DEMO").ok().as_deref() != Some("1") {
         return Ok(());
     }
     let content = serde_json::to_vec_pretty(&default_credentials_payload()).map_err(|error| {
@@ -502,6 +507,20 @@ fn uuid_like_suffix() -> String {
     format!("{:016x}{:016x}", rng.gen::<u64>(), rng.gen::<u64>())
 }
 
+fn external_fallback_status() -> Value {
+    let config = read_config_file_or_empty();
+    let provider_path = config.fallback_provider_path.unwrap_or_default();
+    json!({
+        "configured": config.fallback_provider.is_some(),
+        "provider": config.fallback_provider.map(|provider| provider.as_str()),
+        "providerPathConfigured": !provider_path.is_empty(),
+        "providerPathAbsolute": Path::new(&provider_path).is_absolute(),
+        "requiresExplicitLoginFlag": true,
+        "loginFlag": "--external-fallback",
+        "securityMode": "reduced_external_cli"
+    })
+}
+
 pub fn native_app_status() -> Value {
     let install_path = native_app_bundle_install_path();
     let executable_path = native_app_executable_in_bundle(&install_path);
@@ -517,6 +536,7 @@ pub fn native_app_status() -> Value {
         "socketPath": native_app_socket_path(),
         "credentialsPath": native_app_credentials_path(),
         "brokerLogPath": native_app_broker_log_path(),
+        "externalFallback": external_fallback_status(),
         "service": {
             "running": socket_running(),
             "statusFile": native_app_status_path(),
@@ -682,12 +702,14 @@ pub fn native_app_launch() -> Result<Value> {
     }))
 }
 
-pub fn native_app_login(url: &str) -> Result<Value> {
+pub fn native_app_login(url: &str, allow_external_fallback: bool) -> Result<Value> {
     match native_app_request("login", url) {
         Ok(payload) => Ok(payload),
         Err(error) if matches!(error.code, Status::NoResults | Status::ProcessNotRunning) => {
-            if let Some(payload) = external_provider_login(url)? {
-                return Ok(payload);
+            if allow_external_fallback {
+                if let Some(payload) = external_provider_login(url)? {
+                    return Ok(payload);
+                }
             }
             Err(error)
         }
@@ -816,6 +838,40 @@ fn run_external_provider_command(
             ),
         )
     })?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        APWError::new(
+            Status::ProcessNotRunning,
+            format!(
+                "Failed to capture {} CLI stdout at {}.",
+                provider.as_str(),
+                path.display()
+            ),
+        )
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        APWError::new(
+            Status::ProcessNotRunning,
+            format!(
+                "Failed to capture {} CLI stderr at {}.",
+                provider.as_str(),
+                path.display()
+            ),
+        )
+    })?;
+    let stdout_reader = std::thread::spawn(move || {
+        let mut output = Vec::with_capacity(MAX_BROKER_BYTES.min(8 * 1024));
+        stdout
+            .take((MAX_BROKER_BYTES + 1) as u64)
+            .read_to_end(&mut output)
+            .map(|_| output)
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut output = Vec::with_capacity(MAX_BROKER_BYTES.min(8 * 1024));
+        stderr
+            .take((MAX_BROKER_BYTES + 1) as u64)
+            .read_to_end(&mut output)
+            .map(|_| output)
+    });
     let started = Instant::now();
     let timeout = Duration::from_millis(limits.timeout_ms);
 
@@ -853,23 +909,42 @@ fn run_external_provider_command(
         std::thread::sleep(Duration::from_millis(EXTERNAL_PROVIDER_POLL_MS));
     };
 
-    let mut stdout = Vec::new();
-    if let Some(mut pipe) = child.stdout.take() {
-        pipe.read_to_end(&mut stdout).map_err(|error| {
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| {
+            APWError::new(
+                Status::ProtoInvalidResponse,
+                format!("Failed to read {} CLI stdout.", provider.as_str()),
+            )
+        })?
+        .map_err(|error| {
             APWError::new(
                 Status::ProtoInvalidResponse,
                 format!("Failed to read {} CLI stdout: {error}", provider.as_str()),
             )
         })?;
-    }
-    let mut stderr = Vec::new();
-    if let Some(mut pipe) = child.stderr.take() {
-        pipe.read_to_end(&mut stderr).map_err(|error| {
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| {
+            APWError::new(
+                Status::ProtoInvalidResponse,
+                format!("Failed to read {} CLI stderr.", provider.as_str()),
+            )
+        })?
+        .map_err(|error| {
             APWError::new(
                 Status::ProtoInvalidResponse,
                 format!("Failed to read {} CLI stderr: {error}", provider.as_str()),
             )
         })?;
+    if stdout.len() > MAX_BROKER_BYTES || stderr.len() > MAX_BROKER_BYTES {
+        return Err(APWError::new(
+            Status::ProtoInvalidResponse,
+            format!(
+                "{} CLI returned more than {MAX_BROKER_BYTES} bytes while looking up a credential.",
+                provider.as_str()
+            ),
+        ));
     }
 
     Ok(ExternalProviderCommandOutput {
@@ -880,7 +955,11 @@ fn run_external_provider_command(
 }
 
 fn external_provider_login(url: &str) -> Result<Option<Value>> {
-    let config = read_config_file_or_empty();
+    let config = match read_config_file() {
+        Ok(config) => config,
+        Err(error) if error.message.starts_with("No config file at ") => return Ok(None),
+        Err(error) => return Err(error),
+    };
     let Some(provider) = config.fallback_provider else {
         return Ok(None);
     };
@@ -893,16 +972,7 @@ fn external_provider_login(url: &str) -> Result<Option<Value>> {
             ),
         ));
     };
-    let provider_path = PathBuf::from(provider_path);
-    if !provider_path.is_absolute() {
-        return Err(APWError::new(
-            Status::InvalidConfig,
-            format!(
-                "Fallback provider `{}` must use an absolute executable path.",
-                provider.as_str()
-            ),
-        ));
-    }
+    let provider_path = validate_external_provider_path(provider, provider_path)?;
 
     let host = url::Url::parse(url)
         .map_err(|_| APWError::new(Status::InvalidParam, "Invalid URL for external fallback."))?
@@ -1198,7 +1268,10 @@ fn external_cli_payload(
         "username": username,
         "password": password,
         "transport": "external_cli",
-        "userMediated": false,
+        "userMediated": true,
+        "mediation": "explicit_cli_flag",
+        "externalFallbackExplicit": true,
+        "securityMode": "reduced_external_cli",
         "source": provider.as_str(),
     })
 }
@@ -1210,6 +1283,8 @@ mod tests {
     use serial_test::serial;
     use std::os::unix::net::UnixListener;
     use tempfile::TempDir;
+
+    const TEST_EXTERNAL_FALLBACK_TIMEOUT_MS: u64 = 500;
 
     fn with_temp_home<F, R>(run: F) -> R
     where
@@ -1227,16 +1302,52 @@ mod tests {
         result
     }
 
+    fn with_demo_env<F, R>(value: Option<&str>, run: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        let previous_value = env::var("APW_DEMO").ok();
+        if let Some(value) = value {
+            env::set_var("APW_DEMO", value);
+        } else {
+            env::remove_var("APW_DEMO");
+        }
+        let result = run();
+        if let Some(value) = previous_value {
+            env::set_var("APW_DEMO", value);
+        } else {
+            env::remove_var("APW_DEMO");
+        }
+        result
+    }
+
     #[test]
     #[serial]
-    fn doctor_creates_default_credentials_file() {
+    fn doctor_does_not_create_default_credentials_file_without_demo_gate() {
         with_temp_home(|| {
-            let payload = native_app_doctor().unwrap();
-            assert_eq!(
-                payload["frameworks"]["authenticationServicesLinked"],
-                json!(true)
-            );
-            assert!(native_app_credentials_path().exists());
+            with_demo_env(None, || {
+                let payload = native_app_doctor().unwrap();
+                assert_eq!(
+                    payload["frameworks"]["authenticationServicesLinked"],
+                    json!(true)
+                );
+                assert!(!native_app_credentials_path().exists());
+            });
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn doctor_creates_default_credentials_file_with_demo_gate() {
+        with_temp_home(|| {
+            with_demo_env(Some("1"), || {
+                let payload = native_app_doctor().unwrap();
+                assert_eq!(
+                    payload["frameworks"]["authenticationServicesLinked"],
+                    json!(true)
+                );
+                assert!(native_app_credentials_path().exists());
+            });
         });
     }
 
@@ -1355,7 +1466,7 @@ else:
             )
             .unwrap();
 
-            let payload = native_app_login("https://vault.example.com").unwrap();
+            let payload = native_app_login("https://vault.example.com", true).unwrap();
             assert_eq!(payload["source"], "1password");
             assert_eq!(payload["transport"], "external_cli");
             assert_eq!(payload["username"], "alice@example.com");
@@ -1417,11 +1528,197 @@ else:
             )
             .unwrap();
 
-            let payload = native_app_login("https://vault.example.com").unwrap();
+            let payload = native_app_login("https://vault.example.com", true).unwrap();
             assert_eq!(payload["source"], "bitwarden");
             assert_eq!(payload["transport"], "external_cli");
             assert_eq!(payload["username"], "alice@example.com");
             assert_eq!(payload["url"], "https://vault.example.com/login");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn external_1password_provider_times_out() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("op");
+            fs::write(
+                &provider_path,
+                format!(
+                    "#!/bin/sh\nsleep {}\n",
+                    (TEST_EXTERNAL_FALLBACK_TIMEOUT_MS / 1_000) + 2
+                ),
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+            let config = APWConfigV1 {
+                fallback_provider_timeout_ms: Some(TEST_EXTERNAL_FALLBACK_TIMEOUT_MS),
+                ..APWConfigV1::default()
+            };
+
+            let started = std::time::Instant::now();
+            let error = load_1password_credential(
+                &provider_path,
+                &config,
+                "vault.example.com",
+                "https://vault.example.com",
+            )
+            .unwrap_err();
+            assert_eq!(error.code, Status::CommunicationTimeout);
+            assert!(
+                started.elapsed()
+                    < Duration::from_millis(
+                        TEST_EXTERNAL_FALLBACK_TIMEOUT_MS.saturating_add(2_000)
+                    )
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn external_bitwarden_provider_times_out() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("bw");
+            fs::write(
+                &provider_path,
+                format!(
+                    "#!/bin/sh\nsleep {}\n",
+                    (TEST_EXTERNAL_FALLBACK_TIMEOUT_MS / 1_000) + 2
+                ),
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+            let config = APWConfigV1 {
+                fallback_provider_timeout_ms: Some(TEST_EXTERNAL_FALLBACK_TIMEOUT_MS),
+                ..APWConfigV1::default()
+            };
+
+            let started = std::time::Instant::now();
+            let error = load_bitwarden_credential(
+                &provider_path,
+                &config,
+                "vault.example.com",
+                "https://vault.example.com",
+            )
+            .unwrap_err();
+            assert_eq!(error.code, Status::CommunicationTimeout);
+            assert!(
+                started.elapsed()
+                    < Duration::from_millis(
+                        TEST_EXTERNAL_FALLBACK_TIMEOUT_MS.saturating_add(2_000)
+                    )
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn external_1password_provider_rejects_oversized_output() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("op");
+            fs::write(
+                &provider_path,
+                format!(
+                    "#!/usr/bin/env python3
+import sys
+sys.stdout.write('[' + ('x' * {}) + ']')
+",
+                    MAX_BROKER_BYTES + 1
+                ),
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+            let config = APWConfigV1::default();
+
+            let error = load_1password_credential(
+                &provider_path,
+                &config,
+                "vault.example.com",
+                "https://vault.example.com",
+            )
+            .unwrap_err();
+            assert_eq!(error.code, Status::ProtoInvalidResponse);
+            assert!(error.message.contains("returned more than"));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn external_bitwarden_provider_rejects_oversized_output() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("bw");
+            fs::write(
+                &provider_path,
+                format!(
+                    "#!/usr/bin/env python3
+import sys
+sys.stdout.write('[' + ('x' * {}) + ']')
+",
+                    MAX_BROKER_BYTES + 1
+                ),
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+            let config = APWConfigV1::default();
+
+            let error = load_bitwarden_credential(
+                &provider_path,
+                &config,
+                "vault.example.com",
+                "https://vault.example.com",
+            )
+            .unwrap_err();
+            assert_eq!(error.code, Status::ProtoInvalidResponse);
+            assert!(error.message.contains("returned more than"));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn login_requires_explicit_external_fallback_even_when_configured() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("bw");
+            fs::write(
+                &provider_path,
+                r#"#!/usr/bin/env python3
+import json
+print(json.dumps([{"login":{"username":"alice@example.com","password":"secret","uris":[{"uri":"https://vault.example.com"}]}}]))
+"#,
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::Bitwarden),
+                fallback_provider_path: Some(provider_path.display().to_string()),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            let error = native_app_login("https://vault.example.com", false).unwrap_err();
+            assert_eq!(error.code, Status::ProcessNotRunning);
         });
     }
 
@@ -1444,7 +1741,7 @@ else:
             )
             .unwrap();
 
-            let error = native_app_login("https://vault.example.com").unwrap_err();
+            let error = native_app_login("https://vault.example.com", true).unwrap_err();
             assert_eq!(error.code, Status::InvalidConfig);
             assert!(error.message.contains("absolute executable path"));
         });
@@ -1494,7 +1791,7 @@ time.sleep(10)
             .unwrap();
 
             let started = Instant::now();
-            let error = native_app_login("https://vault.example.com").unwrap_err();
+            let error = native_app_login("https://vault.example.com", true).unwrap_err();
             assert_eq!(error.code, Status::CommunicationTimeout);
             assert!(error.message.contains("timed out after 500ms"));
             assert!(error.message.contains("was killed"));
@@ -1553,10 +1850,10 @@ else:
             )
             .unwrap();
 
-            let payload = native_app_login("https://vault.example.com").unwrap();
+            let payload = native_app_login("https://vault.example.com", true).unwrap();
             assert_eq!(payload["source"], "bitwarden");
 
-            let error = native_app_login("https://vault.example.com").unwrap_err();
+            let error = native_app_login("https://vault.example.com", true).unwrap_err();
             assert_eq!(error.code, Status::GenericError);
             assert!(error.message.contains("invocation limit exceeded"));
             assert!(error.message.contains("fallbackProviderMaxInvocations"));
@@ -1605,7 +1902,7 @@ print(json.dumps({
             permissions.set_mode(0o755);
             fs::set_permissions(&executable, permissions).unwrap();
 
-            let payload = native_app_login("https://example.com").unwrap();
+            let payload = native_app_login("https://example.com", true).unwrap();
             assert_eq!(payload["transport"], "direct_exec");
 
             drop(listener);
@@ -1631,7 +1928,7 @@ print(json.dumps({
             });
 
             let started = std::time::Instant::now();
-            let error = native_app_login("https://example.com").unwrap_err();
+            let error = native_app_login("https://example.com", true).unwrap_err();
             assert_eq!(error.code, Status::CommunicationTimeout);
             assert!(
                 started.elapsed()
@@ -1684,7 +1981,7 @@ print(json.dumps({
             permissions.set_mode(0o755);
             fs::set_permissions(&executable, permissions).unwrap();
 
-            let payload = native_app_login("https://example.com").unwrap();
+            let payload = native_app_login("https://example.com", true).unwrap();
             assert_eq!(payload["transport"], "direct_exec");
         });
     }
