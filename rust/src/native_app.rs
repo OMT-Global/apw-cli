@@ -1419,9 +1419,19 @@ mod tests {
     use crate::types::APWConfigV1;
     use serial_test::serial;
     use std::os::unix::net::UnixListener;
+    use std::path::Path;
     use tempfile::TempDir;
 
     const TEST_EXTERNAL_FALLBACK_TIMEOUT_MS: u64 = 500;
+
+    fn bind_restrictive_socket(path: &Path) -> UnixListener {
+        let previous_umask = unsafe { libc::umask(0o177) };
+        let listener = UnixListener::bind(path);
+        unsafe {
+            libc::umask(previous_umask);
+        }
+        listener.unwrap()
+    }
 
     fn with_temp_home<F, R>(run: F) -> R
     where
@@ -2069,8 +2079,7 @@ print(json.dumps({
         with_temp_home(|| {
             ensure_runtime_dir().unwrap();
             let socket_path = native_app_socket_path();
-            let listener = UnixListener::bind(&socket_path).unwrap();
-            set_permissions(&socket_path, NATIVE_APP_FILE_MODE).unwrap();
+            let listener = bind_restrictive_socket(&socket_path);
 
             let handle = std::thread::spawn(move || {
                 if let Ok((stream, _addr)) = listener.accept() {
