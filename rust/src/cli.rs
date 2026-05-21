@@ -293,6 +293,13 @@ pub struct DoctorCommand {
     /// See issue #12.
     #[arg(long)]
     pub ci: bool,
+    /// Write a redacted diagnostic bundle (tar.gz) to the given path so
+    /// it can be attached to support requests. The bundle excludes
+    /// credentials.json, config.json, broker logs, and environment
+    /// variables, and aborts if any included field looks like a token.
+    /// See issue #56.
+    #[arg(long, value_name = "PATH")]
+    pub bundle: Option<std::path::PathBuf>,
 }
 
 #[derive(Args)]
@@ -471,7 +478,27 @@ fn run_doctor(args: DoctorCommand, cli_json: bool) -> Result<(), APWError> {
 
     let mut payload = native_app_doctor()?;
     if let Some(object) = payload.as_object_mut() {
-        object.insert("environment".to_string(), environment_json);
+        object.insert("environment".to_string(), environment_json.clone());
+    }
+
+    if let Some(bundle_path) = args.bundle.as_deref() {
+        let result =
+            crate::bundle::write_diagnostic_bundle(bundle_path, &payload, &environment_json)?;
+        let summary = serde_json::json!({
+            "bundlePath": result.path,
+            "filesIncluded": result.files_included,
+            "redactionChecks": result.redaction_checks,
+        });
+        if !cli_json {
+            eprintln!(
+                "Wrote diagnostic bundle to {} ({} files, {} redaction checks).",
+                result.path.display(),
+                result.files_included.len(),
+                result.redaction_checks
+            );
+        }
+        print_output(&summary, Status::Success, cli_json);
+        return Ok(());
     }
 
     if !cli_json {

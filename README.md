@@ -135,6 +135,7 @@ apw --help
 apw app install
 apw app launch
 apw doctor
+apw doctor --bundle /tmp/apw-diagnostics.tar.gz
 APW_LOG=debug apw status --json
 apw status
 apw status --json

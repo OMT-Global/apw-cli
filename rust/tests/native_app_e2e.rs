@@ -710,3 +710,168 @@ fn direct_fallback_maps_malformed_response_to_proto_invalid_response() {
         .unwrap_or_default()
         .contains("missing its payload"));
 }
+
+#[test]
+#[serial]
+fn doctor_bundle_writes_deterministic_redacted_archive() {
+    // Issue #56: --bundle writes a tar.gz with a stable layout and never
+    // includes credentials.json contents. We populate
+    // ~/.apw/native-app/credentials.json with plausible secret material
+    // and assert that the secret never appears anywhere in the archive.
+    let fixture = NativeAppFixture::new();
+    let runtime = fixture.home().join(".apw/native-app");
+    fs::create_dir_all(&runtime).expect("failed to create runtime");
+    fs::write(
+        runtime.join("credentials.json"),
+        r#"{"secret":"ghp_PLAUSIBLE_SECRET_THAT_MUST_NEVER_LEAK","domain":"example.com"}"#,
+    )
+    .expect("failed to write credentials");
+    let mut perms = fs::metadata(runtime.join("credentials.json"))
+        .unwrap()
+        .permissions();
+    perms.set_mode(0o600);
+    fs::set_permissions(runtime.join("credentials.json"), perms).unwrap();
+
+    let bundle_dir = TempDir::new().expect("failed to create bundle output dir");
+    let bundle_path = bundle_dir.path().join("apw-doctor-bundle.tar.gz");
+
+    let output = run_apw(
+        &fixture,
+        &[
+            "--json",
+            "doctor",
+            "--bundle",
+            bundle_path.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(output.status, 0, "{output:#?}");
+
+    let payload = parse_success(&output);
+    assert_eq!(
+        payload["payload"]["bundlePath"],
+        serde_json::Value::String(bundle_path.display().to_string())
+    );
+    let files: Vec<String> = payload["payload"]["filesIncluded"]
+        .as_array()
+        .expect("filesIncluded array")
+        .iter()
+        .map(|v| v.as_str().unwrap_or_default().to_string())
+        .collect();
+    let expected = [
+        "manifest.json",
+        "doctor.json",
+        "environment.json",
+        "os.json",
+        "native-app/file-listing.json",
+    ];
+    for name in expected {
+        assert!(
+            files.iter().any(|f| f == name),
+            "expected {name} in {files:?}"
+        );
+    }
+    assert!(
+        payload["payload"]["redactionChecks"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 10
+    );
+
+    assert!(bundle_path.exists(), "bundle file should exist");
+    let mode = fs::metadata(&bundle_path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "bundle file should be 0600");
+
+    let extract_dir = TempDir::new().expect("failed to create extract dir");
+    let extract_status = Command::new("tar")
+        .arg("-xzf")
+        .arg(&bundle_path)
+        .arg("-C")
+        .arg(extract_dir.path())
+        .status()
+        .expect("failed to run tar");
+    assert!(extract_status.success(), "tar extraction failed");
+
+    let bundle_root = extract_dir.path().join("apw-doctor-bundle");
+    assert!(bundle_root.is_dir(), "expected bundle root dir");
+    for name in expected {
+        let p = bundle_root.join(name);
+        assert!(p.exists(), "expected bundle to contain {name}");
+    }
+
+    let mut accumulator: Vec<u8> = Vec::new();
+    fn collect_bytes(path: &Path, acc: &mut Vec<u8>) {
+        if path.is_file() {
+            if let Ok(b) = fs::read(path) {
+                acc.extend_from_slice(&b);
+            }
+        } else if path.is_dir() {
+            for entry in fs::read_dir(path).into_iter().flatten().flatten() {
+                collect_bytes(&entry.path(), acc);
+            }
+        }
+    }
+    collect_bytes(&bundle_root, &mut accumulator);
+    let combined = String::from_utf8_lossy(&accumulator);
+    assert!(
+        !combined.contains("ghp_PLAUSIBLE_SECRET_THAT_MUST_NEVER_LEAK"),
+        "credentials.json contents must not appear in the bundle"
+    );
+
+    let listing: Value = serde_json::from_slice(
+        &fs::read(bundle_root.join("native-app/file-listing.json")).unwrap(),
+    )
+    .unwrap();
+    let entries = listing["entries"].as_array().expect("entries array");
+    let has_credentials = entries
+        .iter()
+        .any(|e| e["path"].as_str() == Some("credentials.json"));
+    assert!(
+        has_credentials,
+        "file listing must reference credentials.json by name"
+    );
+    let credentials_entry = entries
+        .iter()
+        .find(|e| e["path"].as_str() == Some("credentials.json"))
+        .unwrap();
+    assert_eq!(credentials_entry["type"], "file");
+    assert!(credentials_entry["size"].as_u64().unwrap_or(0) > 0);
+}
+
+#[test]
+#[serial]
+fn doctor_bundle_fails_closed_when_diagnostic_field_looks_secret_like() {
+    // Issue #56: if any diagnostic string looks token-like, the bundle
+    // must abort instead of shipping incompletely-redacted material. We
+    // inject the sentinel via APW_RUNNER_LABELS, which flows verbatim
+    // into the CI runner-labels diagnostic.
+    let fixture = NativeAppFixture::new();
+    let bundle_dir = TempDir::new().expect("failed to create bundle output dir");
+    let bundle_path = bundle_dir.path().join("should-not-exist.tar.gz");
+
+    let output = run_apw(
+        &fixture,
+        &[
+            "--json",
+            "doctor",
+            "--bundle",
+            bundle_path.to_str().unwrap(),
+        ],
+        &[
+            ("CI", "true"),
+            ("APW_RUNNER_LABELS", "apw-demo-password-leaked-into-labels"),
+        ],
+    );
+    assert_ne!(output.status, 0, "expected failure, got {output:#?}");
+
+    let err = parse_error(&output);
+    let message = err["error"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("Aborting bundle"),
+        "expected fail-closed message, got: {message}"
+    );
+    assert!(
+        !bundle_path.exists(),
+        "bundle file must not exist after fail-closed abort"
+    );
+}

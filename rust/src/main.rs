@@ -1,5 +1,6 @@
 use clap::Parser;
 
+mod bundle;
 mod cli;
 mod client;
 mod daemon;

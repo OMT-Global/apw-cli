@@ -637,7 +637,7 @@ fn send_request_via_executable(command: &str, payload: Value) -> Result<Value> {
     parse_response(value)
 }
 
-fn uuid_like_suffix() -> String {
+pub fn uuid_like_suffix() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
     format!("{:016x}{:016x}", rng.gen::<u64>(), rng.gen::<u64>())
