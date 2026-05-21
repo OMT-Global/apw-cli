@@ -99,6 +99,27 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Provision OpenSSL and pkg-config for openssl-sys
+        # Issue #40: the openssl-sys build script needs pkg-config to find a
+        # system OpenSSL on macOS. The xcode runner image does not ship
+        # pkg-config by default, so we install it (and OpenSSL) via brew and
+        # export the discovery env vars for subsequent steps.
+        run: |
+          set -euo pipefail
+          if ! command -v brew >/dev/null 2>&1; then
+            echo "Homebrew is required on the macOS runner to provision OpenSSL." >&2
+            exit 1
+          fi
+          brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
+          OPENSSL_PREFIX="$(brew --prefix openssl@3)"
+          {
+            echo "OPENSSL_DIR=$OPENSSL_PREFIX"
+            echo "OPENSSL_INCLUDE_DIR=$OPENSSL_PREFIX/include"
+            echo "OPENSSL_LIB_DIR=$OPENSSL_PREFIX/lib"
+            echo "PKG_CONFIG_PATH=$OPENSSL_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          } >> "$GITHUB_ENV"
+
       - name: Run extended validation
         run: bash scripts/ci/run-extended-validation.sh
 

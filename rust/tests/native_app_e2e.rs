@@ -183,6 +183,21 @@ def maybe_emit_direct_override():
         sys.stdout.write(json.dumps({"ok": True, "code": 0}))
         sys.stdout.flush()
         return True
+    if mode == "flood":
+        # Emit far more than MAX_MESSAGE_BYTES (32 KiB) without ever closing
+        # stdout to a sentinel. The bounded read in the Rust CLI must cap
+        # this without growing past the configured limit. See issue #42.
+        chunk = b"A" * 4096
+        for _ in range(64):
+            sys.stdout.buffer.write(chunk)
+            sys.stdout.buffer.flush()
+        return True
+    if mode == "hang":
+        # Sleep past the direct-exec timeout to force the bounded helper to
+        # terminate the child. The CLI must surface a CommunicationTimeout
+        # rather than block. See issue #42.
+        time.sleep(30)
+        return True
     return False
 
 
@@ -709,4 +724,63 @@ fn direct_fallback_maps_malformed_response_to_proto_invalid_response() {
         .as_str()
         .unwrap_or_default()
         .contains("missing its payload"));
+}
+
+#[test]
+#[serial]
+fn direct_fallback_bounds_oversized_stdout() {
+    // Issue #42: a fallback executable that streams unbounded output must
+    // be capped before the CLI buffers the full payload. Previously the
+    // CLI used Command::output() and only checked the length after the
+    // child exited.
+    let fixture = NativeAppFixture::new();
+
+    let install = run_apw(&fixture, &["--json", "app", "install"], &[]);
+    assert_eq!(install.status, 0, "{install:#?}");
+
+    let flood = run_apw(
+        &fixture,
+        &["--json", "login", "https://example.com"],
+        &[("APW_FAKE_DIRECT_RESPONSE", "flood")],
+    );
+    assert_eq!(flood.status, 104, "{flood:#?}");
+    let payload = parse_error(&flood);
+    let error = payload["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("too large"),
+        "expected oversize error, got {error}"
+    );
+}
+
+#[test]
+#[serial]
+fn direct_fallback_terminates_hung_child() {
+    // Issue #42: a fallback executable that never exits must be terminated
+    // by the CLI rather than blocking it forever. The bounded helper
+    // surfaces a CommunicationTimeout (code 101).
+    let fixture = NativeAppFixture::new();
+
+    let install = run_apw(&fixture, &["--json", "app", "install"], &[]);
+    assert_eq!(install.status, 0, "{install:#?}");
+
+    let started = std::time::Instant::now();
+    let hung = run_apw(
+        &fixture,
+        &["--json", "login", "https://example.com"],
+        &[("APW_FAKE_DIRECT_RESPONSE", "hang")],
+    );
+    let elapsed = started.elapsed();
+
+    assert_eq!(hung.status, 101, "{hung:#?}");
+    let payload = parse_error(&hung);
+    let error = payload["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("did not respond"),
+        "expected timeout error, got {error}"
+    );
+    // The fake app sleeps 30s; the CLI must terminate it well before that.
+    assert!(
+        elapsed < Duration::from_secs(15),
+        "expected timeout within 15s, took {elapsed:?}"
+    );
 }

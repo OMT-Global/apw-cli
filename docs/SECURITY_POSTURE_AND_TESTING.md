@@ -39,8 +39,15 @@ Release reference version: `v2.0.0`
 - native app UNIX-socket requests use a `3s` read/write timeout
 - a hung broker socket returns a non-zero `CommunicationTimeout` error instead
   of blocking the CLI indefinitely
-- direct executable fallback responses are still bounded by the same maximum
-  response size before JSON decoding
+- direct executable fallback runs the APW app bundle under a `5s` wall-clock
+  timeout, reads at most the configured maximum response size from each of
+  stdout and stderr via bounded pipe reads, and terminates the child (process
+  group) on timeout so a hung or runaway fallback cannot block or exhaust CLI
+  memory
+- `apw doctor` CI diagnostics run external tool probes (`xcodebuild`, `cargo`,
+  `detect-secrets`, `security find-identity`) under the same bounded-read
+  helper with a `3s` per-probe timeout, so a misconfigured shim does not hang
+  the doctor command
 - timed-out requests do not cache or persist partially returned credentials
 
 ## Required release gates
