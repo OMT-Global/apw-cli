@@ -234,6 +234,7 @@ fn normalize_legacy_config(raw: APWConfig) -> APWConfigV1 {
         },
         fallback_provider: None,
         fallback_provider_path: None,
+        fallback_provider_database: None,
         fallback_provider_timeout_ms: None,
         fallback_provider_max_invocations: None,
         last_launch_status: None,
@@ -347,6 +348,7 @@ pub fn read_config_file_or_empty() -> APWConfigV1 {
         secret_source: Some(SecretSource::File),
         fallback_provider: None,
         fallback_provider_path: None,
+        fallback_provider_database: None,
         fallback_provider_timeout_ms: None,
         fallback_provider_max_invocations: None,
         created_at: Utc.timestamp_nanos(0).to_rfc3339(),
@@ -377,6 +379,7 @@ pub fn read_config(opts: Option<ConfigReadOptions>) -> Result<APWRuntimeConfig> 
                 bridge_last_error: None,
                 fallback_provider: None,
                 fallback_provider_path: None,
+                fallback_provider_database: None,
                 fallback_provider_timeout_ms: None,
                 fallback_provider_max_invocations: None,
                 created_at: Utc.timestamp_nanos(0).to_rfc3339(),
@@ -408,6 +411,7 @@ pub fn read_config(opts: Option<ConfigReadOptions>) -> Result<APWRuntimeConfig> 
             bridge_last_error: None,
             fallback_provider: None,
             fallback_provider_path: None,
+            fallback_provider_database: None,
             fallback_provider_timeout_ms: None,
             fallback_provider_max_invocations: None,
             created_at: Utc.timestamp_nanos(0).to_rfc3339(),
@@ -438,6 +442,7 @@ pub fn read_config(opts: Option<ConfigReadOptions>) -> Result<APWRuntimeConfig> 
             bridge_last_error: raw.bridge_last_error,
             fallback_provider: raw.fallback_provider,
             fallback_provider_path: raw.fallback_provider_path,
+            fallback_provider_database: raw.fallback_provider_database,
             fallback_provider_timeout_ms: raw.fallback_provider_timeout_ms,
             fallback_provider_max_invocations: raw.fallback_provider_max_invocations,
             created_at: raw.created_at,
@@ -506,6 +511,7 @@ pub fn read_config(opts: Option<ConfigReadOptions>) -> Result<APWRuntimeConfig> 
         bridge_last_error: raw.bridge_last_error,
         fallback_provider: raw.fallback_provider,
         fallback_provider_path: raw.fallback_provider_path,
+        fallback_provider_database: raw.fallback_provider_database,
         fallback_provider_timeout_ms: raw.fallback_provider_timeout_ms,
         fallback_provider_max_invocations: raw.fallback_provider_max_invocations,
         created_at: raw.created_at,
@@ -732,6 +738,9 @@ pub fn write_config(input: WriteConfigInput) -> Result<APWConfigV1> {
         fallback_provider_path: existing
             .as_ref()
             .and_then(|value| value.fallback_provider_path.clone()),
+        fallback_provider_database: existing
+            .as_ref()
+            .and_then(|value| value.fallback_provider_database.clone()),
         fallback_provider_timeout_ms: existing
             .as_ref()
             .and_then(|value| value.fallback_provider_timeout_ms),
@@ -1022,6 +1031,7 @@ mod tests {
                 secret_source: Some(SecretSource::File),
                 fallback_provider: None,
                 fallback_provider_path: None,
+                fallback_provider_database: None,
                 fallback_provider_timeout_ms: None,
                 fallback_provider_max_invocations: None,
                 created_at: (chrono::Utc::now() - chrono::Duration::days(40)).to_rfc3339(),
@@ -1081,6 +1091,7 @@ mod tests {
                 secret_source: Some(SecretSource::Keychain),
                 fallback_provider: None,
                 fallback_provider_path: None,
+                fallback_provider_database: None,
                 fallback_provider_timeout_ms: None,
                 fallback_provider_max_invocations: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
@@ -1157,6 +1168,7 @@ mod tests {
                 secret_source: Some(SecretSource::File),
                 fallback_provider: None,
                 fallback_provider_path: None,
+                fallback_provider_database: None,
                 fallback_provider_timeout_ms: None,
                 fallback_provider_max_invocations: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
