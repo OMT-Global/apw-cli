@@ -144,11 +144,11 @@ Requirements:
 | `apw auth request` | remove | private-helper flow goes away |
 | `apw auth response` | remove | private-helper flow goes away |
 | `apw pw list` | remove | unsupported as a vault-wide native API contract |
-| `apw pw get <domain> <username>` | deprecate then replace | map to `apw login https://<domain>` |
+| `apw pw get <domain> <username>` | remove | use `apw login https://<domain>` |
 | `apw otp list` | remove | unsupported until proven otherwise |
-| `apw otp get` | likely remove | only keep if supported native verification-code path is proven |
+| `apw otp get` | remove | unsupported until a native verification-code path is proven |
 | `apw status` | keep | report app/XPC/entitlement readiness |
-| `apw start` | remove or repurpose | native app launch replaces daemon start |
+| `apw start` | remove | native app launch replaces daemon start |
 
 ## Implementation phases
 

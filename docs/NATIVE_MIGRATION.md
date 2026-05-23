@@ -10,16 +10,16 @@ browser-helper vault reader flow.
 
 | Legacy command | v2 status | Replacement |
 | --- | --- | --- |
-| `apw auth` | legacy-only | `apw app launch` then `apw login <url>` |
-| `apw auth request` | legacy-only | no direct replacement |
-| `apw auth response` | legacy-only | no direct replacement |
-| `apw pw list` | legacy-only | no replacement in v2 |
-| `apw pw get <url> <username>` | legacy-only | `apw login <url>` |
-| `apw otp list` | legacy-only | no replacement in v2 |
-| `apw otp get <url>` | legacy-only | no replacement in v2 |
+| `apw auth` | removed in v2.1.0 | `apw app launch` then `apw login <url>` |
+| `apw auth request` | removed in v2.1.0 | no direct replacement |
+| `apw auth response` | removed in v2.1.0 | no direct replacement |
+| `apw pw list` | removed in v2.1.0 | no replacement in v2 |
+| `apw pw get <url> <username>` | removed in v2.1.0 | `apw login <url>` |
+| `apw otp list` | removed in v2.1.0 | no replacement in v2 |
+| `apw otp get <url>` | removed in v2.1.0 | no replacement in v2 |
 | `apw status` | supported | `apw status --json` now reports app/broker readiness |
 | `apw host doctor` | legacy-only | `apw doctor` |
-| `apw start` | legacy-only | `apw app launch` |
+| `apw start` | removed in v2.1.0 | `apw app launch` |
 
 ## Bootstrap Flow
 
@@ -34,5 +34,5 @@ browser-helper vault reader flow.
 - `v1.x` remains the historical parity line for browser-helper behavior.
 - The v2 bootstrap currently supports one demo associated domain:
   `https://example.com`
-- Legacy `auth`, `pw`, and `otp` commands remain in the repo for migration and
-  reference, but they are no longer the primary contract.
+- Legacy `auth`, `pw`, `otp`, and `start` commands are no longer available in
+  the active CLI. The archived parity line remains under `legacy/`.
