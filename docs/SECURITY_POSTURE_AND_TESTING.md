@@ -108,7 +108,13 @@ cargo test --manifest-path rust/Cargo.toml --test legacy_parity
 cargo test --manifest-path rust/Cargo.toml --test native_app_e2e
 ./scripts/build-universal-release.sh
 ./scripts/verify-universal-binaries.sh
+bash scripts/ci/run-quality-indicators.sh
 ```
+
+For high-risk changes, enable the deeper optional checks described in
+[QUALITY_GATES.md](QUALITY_GATES.md): `APW_RUN_COVERAGE=1` adds LCOV-backed CRAP
+scores when `cargo-llvm-cov` is installed, and `APW_RUN_MUTATION=1` runs
+`cargo-mutants` when available.
 
 Before claiming Phase 3 complete for a public release, run the real-hardware
 notarized broker validation in

@@ -40,6 +40,8 @@ while IFS= read -r -d '' script; do
   bash -n "$script"
 done < <(find .github/scripts scripts -type f -name '*.sh' -print0)
 
+python3 scripts/quality/crap_indicator.py --self-test
+
 ./scripts/test-render-homebrew-formula.sh
 ./scripts/test-extended-validation-config.sh
 ./scripts/test-verify-universal-binaries.sh
