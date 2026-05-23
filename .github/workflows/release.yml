@@ -44,11 +44,8 @@ jobs:
           cargo test --manifest-path rust/Cargo.toml --test legacy_parity
           cargo test --manifest-path rust/Cargo.toml --test security_regressions
 
-      - name: Build release binary
-        run: cargo build --manifest-path rust/Cargo.toml --release
-
-      - name: Build native app bundle
-        run: ./scripts/build-native-app.sh
+      - name: Build universal release binaries
+        run: ./scripts/build-universal-release.sh
 
       - name: Build local source tarball for Homebrew smoke
         id: source_tarball
@@ -99,9 +96,6 @@ jobs:
           ./rust/target/release/apw --version
           ./rust/target/release/apw status --json
 
-      - name: Build native app bundle
-        run: ./scripts/build-native-app.sh
-
       - name: Homebrew smoke install from source tarball
         env:
           APW_SRC_TARBALL: ${{ steps.source_tarball.outputs.path }}
@@ -149,6 +143,9 @@ jobs:
           tar -tzf "$archive" | grep -qx 'apw'
           tar -tzf "$archive" | grep -qx 'APW.app/Contents/Info.plist'
           tar -tzf "$archive" | grep -qx 'APW.app/Contents/MacOS/APW'
+
+      - name: Validate universal release binaries
+        run: ./scripts/verify-universal-binaries.sh
 
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
