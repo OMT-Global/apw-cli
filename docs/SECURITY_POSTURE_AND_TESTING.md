@@ -39,8 +39,15 @@ Release reference version: `v2.0.0`
 - native app UNIX-socket requests use a `3s` read/write timeout
 - a hung broker socket returns a non-zero `CommunicationTimeout` error instead
   of blocking the CLI indefinitely
-- direct executable fallback responses are still bounded by the same maximum
-  response size before JSON decoding
+- direct executable fallback runs the APW app bundle under a `5s` wall-clock
+  timeout, reads at most the configured maximum response size from each of
+  stdout and stderr via bounded pipe reads, and terminates the child (process
+  group) on timeout so a hung or runaway fallback cannot block or exhaust CLI
+  memory
+- `apw doctor` CI diagnostics run external tool probes (`xcodebuild`, `cargo`,
+  `detect-secrets`, `security find-identity`) under the same bounded-read
+  helper with a `3s` per-probe timeout, so a misconfigured shim does not hang
+  the doctor command
 - timed-out requests do not cache or persist partially returned credentials
 
 ### Diagnostic-bundle export
@@ -67,9 +74,9 @@ Redaction guarantees:
   listing (relative path, byte size, octal mode, file type) is included
 - `credentials.json`, `config.json`, and `broker.log` are explicitly excluded
 - every string in the bundle JSON is scanned for token-like patterns
-  (long high-entropy alphanumeric runs, vendor key prefixes such as `ghp_` /
-  `AKIA` / `sk-`, and the in-tree demo password sentinel); a match aborts the
-  bundle with an `InvalidConfig` (102) error and does not write the archive
+  (long high-entropy alphanumeric runs, common vendor key prefixes, and the
+  in-tree demo password sentinel); a match aborts the bundle with an
+  `InvalidConfig` (102) error and does not write the archive
 - the archive file is written mode `0600`
 
 If an operator needs to share broker logs or config they attach those

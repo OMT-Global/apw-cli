@@ -183,6 +183,21 @@ def maybe_emit_direct_override():
         sys.stdout.write(json.dumps({"ok": True, "code": 0}))
         sys.stdout.flush()
         return True
+    if mode == "flood":
+        # Emit far more than MAX_MESSAGE_BYTES (32 KiB) without ever closing
+        # stdout to a sentinel. The bounded read in the Rust CLI must cap
+        # this without growing past the configured limit. See issue #42.
+        chunk = b"A" * 4096
+        for _ in range(64):
+            sys.stdout.buffer.write(chunk)
+            sys.stdout.buffer.flush()
+        return True
+    if mode == "hang":
+        # Sleep past the direct-exec timeout to force the bounded helper to
+        # terminate the child. The CLI must surface a CommunicationTimeout
+        # rather than block. See issue #42.
+        time.sleep(30)
+        return True
     return False
 
 
@@ -723,7 +738,7 @@ fn doctor_bundle_writes_deterministic_redacted_archive() {
     fs::create_dir_all(&runtime).expect("failed to create runtime");
     fs::write(
         runtime.join("credentials.json"),
-        r#"{"secret":"ghp_PLAUSIBLE_SECRET_THAT_MUST_NEVER_LEAK","domain":"example.com"}"#,
+        r#"{"secret":"apw-redaction-sentinel-must-never-leak","domain":"example.com"}"#,
     )
     .expect("failed to write credentials");
     let mut perms = fs::metadata(runtime.join("credentials.json"))
@@ -814,7 +829,7 @@ fn doctor_bundle_writes_deterministic_redacted_archive() {
     collect_bytes(&bundle_root, &mut accumulator);
     let combined = String::from_utf8_lossy(&accumulator);
     assert!(
-        !combined.contains("ghp_PLAUSIBLE_SECRET_THAT_MUST_NEVER_LEAK"),
+        !combined.contains("apw-redaction-sentinel-must-never-leak"),
         "credentials.json contents must not appear in the bundle"
     );
 
@@ -836,6 +851,32 @@ fn doctor_bundle_writes_deterministic_redacted_archive() {
         .unwrap();
     assert_eq!(credentials_entry["type"], "file");
     assert!(credentials_entry["size"].as_u64().unwrap_or(0) > 0);
+}
+
+#[test]
+#[serial]
+fn direct_fallback_bounds_oversized_stdout() {
+    // Issue #42: a fallback executable that streams unbounded output must
+    // be capped before the CLI buffers the full payload. Previously the
+    // CLI used Command::output() and only checked the length after the
+    // child exited.
+    let fixture = NativeAppFixture::new();
+
+    let install = run_apw(&fixture, &["--json", "app", "install"], &[]);
+    assert_eq!(install.status, 0, "{install:#?}");
+
+    let flood = run_apw(
+        &fixture,
+        &["--json", "login", "https://example.com"],
+        &[("APW_FAKE_DIRECT_RESPONSE", "flood")],
+    );
+    assert_eq!(flood.status, 104, "{flood:#?}");
+    let payload = parse_error(&flood);
+    let error = payload["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("too large"),
+        "expected oversize error, got {error}"
+    );
 }
 
 #[test]
@@ -873,5 +914,38 @@ fn doctor_bundle_fails_closed_when_diagnostic_field_looks_secret_like() {
     assert!(
         !bundle_path.exists(),
         "bundle file must not exist after fail-closed abort"
+    );
+}
+
+#[test]
+#[serial]
+fn direct_fallback_terminates_hung_child() {
+    // Issue #42: a fallback executable that never exits must be terminated
+    // by the CLI rather than blocking it forever. The bounded helper
+    // surfaces a CommunicationTimeout (code 101).
+    let fixture = NativeAppFixture::new();
+
+    let install = run_apw(&fixture, &["--json", "app", "install"], &[]);
+    assert_eq!(install.status, 0, "{install:#?}");
+
+    let started = std::time::Instant::now();
+    let hung = run_apw(
+        &fixture,
+        &["--json", "login", "https://example.com"],
+        &[("APW_FAKE_DIRECT_RESPONSE", "hang")],
+    );
+    let elapsed = started.elapsed();
+
+    assert_eq!(hung.status, 101, "{hung:#?}");
+    let payload = parse_error(&hung);
+    let error = payload["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("did not respond"),
+        "expected timeout error, got {error}"
+    );
+    // The fake app sleeps 30s; the CLI must terminate it well before that.
+    assert!(
+        elapsed < Duration::from_secs(15),
+        "expected timeout within 15s, took {elapsed:?}"
     );
 }

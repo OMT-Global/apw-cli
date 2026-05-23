@@ -20,6 +20,38 @@ run_step() {
   "$@"
 }
 
+# Issue #40: openssl-sys discovery on macOS requires pkg-config and a
+# locatable OpenSSL prefix. The workflow caller exports these via
+# $GITHUB_ENV; we mirror the discovery here so direct shell invocations on a
+# clean macOS host (or runner steps that bypass the workflow) still succeed
+# with a clear error if the toolchain is unavailable.
+ensure_openssl_on_macos() {
+  [[ "${OSTYPE:-}" == darwin* ]] || return 0
+  if [[ -n "${OPENSSL_DIR:-}" ]] && command -v pkg-config >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! command -v brew >/dev/null 2>&1; then
+    echo "Homebrew is required on macOS to locate OpenSSL for openssl-sys." >&2
+    echo "Install Homebrew or export OPENSSL_DIR/PKG_CONFIG_PATH manually." >&2
+    exit 1
+  fi
+  if ! command -v pkg-config >/dev/null 2>&1; then
+    brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
+  fi
+  local prefix
+  prefix="$(brew --prefix openssl@3 2>/dev/null || true)"
+  if [[ -z "$prefix" || ! -d "$prefix" ]]; then
+    brew install openssl@3
+    prefix="$(brew --prefix openssl@3)"
+  fi
+  export OPENSSL_DIR="$prefix"
+  export OPENSSL_INCLUDE_DIR="$prefix/include"
+  export OPENSSL_LIB_DIR="$prefix/lib"
+  export PKG_CONFIG_PATH="$prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+}
+
+ensure_openssl_on_macos
+
 require_tool cargo
 require_tool swift
 
