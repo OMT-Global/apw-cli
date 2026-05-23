@@ -40,6 +40,7 @@
     - Docker, service-container, browser, and `container:` workloads stay on GitHub-hosted runners.
     - Keep PR checks cheap. Add heavy validation to `scripts/ci/run-extended-validation.sh` instead of the PR lane.
     - APW extended validation requires both Rust (`cargo`) and the macOS Swift toolchain, so the `extended-checks` job must run on the org macOS self-hosted pool (`[self-hosted, private, macOS, ARM64, xcode]`) rather than the Synology shell-only pool.
+    - Extended validation runs `scripts/ci/run-native-app-preflight.sh`, which exercises the Swift package through `xcodebuild`, builds `APW.app`, verifies codesign, and confirms the associated-domain entitlement is embedded.
 
     ## Release Prep
 

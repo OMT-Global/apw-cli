@@ -27,7 +27,17 @@ run_step() {
 # with a clear error if the toolchain is unavailable.
 ensure_openssl_on_macos() {
   [[ "${OSTYPE:-}" == darwin* ]] || return 0
-  if [[ -n "${OPENSSL_DIR:-}" ]] && command -v pkg-config >/dev/null 2>&1; then
+  local host_arch
+  host_arch="$(uname -m)"
+  openssl_prefix_matches_host() {
+    local prefix="$1"
+    local dylib="$prefix/lib/libssl.dylib"
+    [[ -f "$dylib" ]] || return 1
+    file "$dylib" | grep -q "$host_arch"
+  }
+  if [[ -n "${OPENSSL_DIR:-}" ]] \
+    && command -v pkg-config >/dev/null 2>&1 \
+    && openssl_prefix_matches_host "$OPENSSL_DIR"; then
     return 0
   fi
   if ! command -v brew >/dev/null 2>&1; then
@@ -39,21 +49,36 @@ ensure_openssl_on_macos() {
     brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
   fi
   local prefix
-  prefix="$(brew --prefix openssl@3 2>/dev/null || true)"
+  prefix=""
+  for candidate in /opt/homebrew/opt/openssl@3 /usr/local/opt/openssl@3; do
+    if openssl_prefix_matches_host "$candidate"; then
+      prefix="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$prefix" ]]; then
+    prefix="$(brew --prefix openssl@3 2>/dev/null || true)"
+  fi
   if [[ -z "$prefix" || ! -d "$prefix" ]]; then
     brew install openssl@3
     prefix="$(brew --prefix openssl@3)"
   fi
+  if ! openssl_prefix_matches_host "$prefix"; then
+    echo "Homebrew OpenSSL at $prefix does not contain $host_arch libraries." >&2
+    echo "Install a host-architecture openssl@3 or export OPENSSL_DIR manually." >&2
+    exit 1
+  fi
   export OPENSSL_DIR="$prefix"
   export OPENSSL_INCLUDE_DIR="$prefix/include"
   export OPENSSL_LIB_DIR="$prefix/lib"
-  export PKG_CONFIG_PATH="$prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+  export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
 }
 
 ensure_openssl_on_macos
 
 require_tool cargo
 require_tool swift
+require_tool xcodebuild
 
 run_step "Rust native app end-to-end tests" \
   cargo test --manifest-path rust/Cargo.toml --test native_app_e2e
@@ -64,8 +89,8 @@ run_step "Rust security regression tests" \
 run_step "Rust clippy" \
   cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 
-run_step "Swift native app release build" \
-  ./scripts/build-native-app.sh
+run_step "Native app xcodebuild, signing, and entitlement preflight" \
+  bash scripts/ci/run-native-app-preflight.sh
 
 echo
 echo "APW extended validation passed."

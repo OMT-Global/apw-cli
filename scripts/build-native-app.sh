@@ -11,6 +11,7 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 PLIST_PATH="$CONTENTS_DIR/Info.plist"
 EXECUTABLE_PATH="$PACKAGE_DIR/.build/release/$EXECUTABLE_NAME"
+ENTITLEMENTS_PATH="$PACKAGE_DIR/APW.entitlements"
 VERSION="$(awk -F ' = ' '$1 == "version" { gsub(/"/, "", $2); print $2; exit }' "$ROOT_DIR/rust/Cargo.toml")"
 
 if [[ -z "$VERSION" ]]; then
@@ -53,7 +54,7 @@ cat >"$PLIST_PATH" <<EOF
 EOF
 
 if command -v codesign >/dev/null 2>&1; then
-  if ! codesign -s - --force --deep "$APP_DIR" 2>/dev/null; then
+  if ! codesign -s - --force --deep --entitlements "$ENTITLEMENTS_PATH" "$APP_DIR" 2>/dev/null; then
     echo "Warning: ad-hoc code signing failed for $APP_DIR. The bundle may be rejected by Gatekeeper." >&2
   fi
 fi
