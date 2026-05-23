@@ -62,10 +62,14 @@
     | `APPLE_NOTARY_PRIVATE_KEY`   | base64-encoded `.p8` private key for `notarytool`              |
     | `HOMEBREW_TAP_TOKEN`         | scoped `contents:write` token on the tap repo (issue #6)       |
 
-    All Apple credentials are optional — when absent, the workflow emits
-    a `::warning::` and continues without notarization. The Homebrew tap
-    job is `continue-on-error` so a missing or rejected token does not
-    block the release.
+    On tagged releases, `scripts/notarize-native-app.sh` imports the Developer
+    ID certificate into a temporary keychain, signs the release CLI and
+    `APW.app`, submits the app bundle to Apple notary service, staples the
+    ticket, and verifies Gatekeeper assessment before the archive is packaged.
+    All Apple credentials are optional — when absent, the workflow emits a
+    `::warning::` and continues without notarization. The Homebrew tap job is
+    `continue-on-error` so a missing or rejected token does not block the
+    release.
 
     ## Home Profiles
 
