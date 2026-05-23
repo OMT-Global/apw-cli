@@ -2599,7 +2599,13 @@ mod tests {
         socket.send_to(&payload, ("127.0.0.1", port)).unwrap();
 
         let mut buffer = vec![0_u8; 4096];
-        let size = socket.recv(&mut buffer).unwrap();
+        let size = loop {
+            match socket.recv(&mut buffer) {
+                Ok(size) => break size,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => panic!("failed to receive daemon test response: {error}"),
+            }
+        };
         serde_json::from_slice(&buffer[..size]).unwrap()
     }
 
