@@ -67,6 +67,40 @@ tar -xzf apw-macos-vX.Y.Z.tar.gz
 After `apw app install`, the CLI copies `APW.app` into
 `~/.apw/native-app/installed/APW.app`.
 
+## Install from a release DMG
+
+Release DMGs are named `apw-macos-vX.Y.Z.dmg`. Each release also publishes a
+matching `apw-macos-vX.Y.Z.dmg.sha256` file for checksum verification.
+
+Download both files from the GitHub release, then verify the DMG before opening
+it:
+
+```bash
+shasum -a 256 -c apw-macos-vX.Y.Z.dmg.sha256
+```
+
+Open the DMG and install the app bundle:
+
+```bash
+hdiutil attach apw-macos-vX.Y.Z.dmg
+cp -R "/Volumes/APW vX.Y.Z/APW.app" /Applications/APW.app
+install -m 0755 "/Volumes/APW vX.Y.Z/bin/apw" /usr/local/bin/apw
+hdiutil detach "/Volumes/APW vX.Y.Z"
+```
+
+Then run the first-use setup:
+
+```bash
+apw --version
+apw status --json
+apw app install
+apw app launch
+```
+
+Gatekeeper should accept release DMGs built by the release workflow. If macOS
+blocks the app, stop the install and verify that the release asset was signed
+and notarized before use.
+
 ## Homebrew
 
 ### Local formula smoke test
