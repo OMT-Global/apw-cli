@@ -78,6 +78,25 @@ The Rust test suite covers:
 - end-to-end v2 app install, launch, status, doctor, and login flows
 - direct-exec fallback, unsupported-domain handling, denial handling, and malformed broker response mapping
 
+The native app Swift test suite covers:
+
+- localized approval prompt copy for APW-owned UI
+- accessibility labels for the credential approval window and buttons
+- broker envelope parsing, permission checks, denial handling, and typed AuthenticationServices fallback errors
+
+## Accessibility and localization audit
+
+Rerun this checklist before each minor release and when changing APW-owned UI.
+Apple-owned AuthenticationServices picker UI is out of scope for direct labels,
+but the APW surfaces around it remain in scope.
+
+- VoiceOver announces the APW credential approval window with a clear label.
+- VoiceOver announces Allow and Deny buttons with action-oriented labels.
+- Keyboard-only users can reach and activate every APW-owned approval control.
+- APW-owned user-visible strings are loaded from `Localizable.strings`.
+- At least one non-English `.lproj` resource ships in `APW.app`.
+- Reduced motion, high contrast, and increased text size do not hide or truncate APW-owned approval text.
+
 ## Archive policy
 
 The Deno implementation is archived and not part of the supported security
