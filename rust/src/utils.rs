@@ -9,7 +9,7 @@ use chrono::{TimeZone, Utc};
 use num_bigint::BigUint;
 use num_traits::{One, Zero};
 use rand::RngCore;
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::env;
 use std::fs::{self, OpenOptions};
@@ -17,6 +17,7 @@ use std::io::Write;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 pub const SESSION_MAX_AGE_MS: u64 = 30 * 24 * 60 * 60 * 1000;
 
@@ -25,6 +26,8 @@ const CONFIG_FILE_MODE: u32 = 0o600;
 const CONFIG_SCHEMA: i32 = 1;
 const MAX_CONFIG_SIZE_BYTES: usize = 10 * 1024;
 const EXTERNAL_PROVIDER_MAX_MODE: u32 = 0o755;
+const MANAGED_PREFS_DOMAIN: &str = "dev.omt.apw";
+const MANAGED_PREFS_TEST_PLIST_ENV: &str = "APW_MANAGED_PREFS_PLIST";
 
 #[derive(Debug, Clone)]
 pub struct ConfigReadOptions {
@@ -62,6 +65,17 @@ pub struct WriteConfigInput {
     pub reset_launch_metadata: bool,
     pub reset_bridge_metadata: bool,
     pub refresh_created_at: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ManagedConfig {
+    fallback_provider: Option<ExternalFallbackProvider>,
+    fallback_provider_path: Option<String>,
+    fallback_provider_timeout_ms: Option<u64>,
+    fallback_provider_max_invocations: Option<u32>,
+    supported_domains: Option<Vec<String>>,
+    disable_demo: Option<bool>,
+    managed_keys: Vec<&'static str>,
 }
 
 fn config_root() -> PathBuf {
@@ -116,7 +130,187 @@ fn stale_config(created_at: &str, max_age_ms: u64) -> bool {
         .unwrap_or(true)
 }
 
-fn read_config_file_or_null() -> Result<APWConfigV1> {
+fn decode_plist_text(value: &str) -> String {
+    value
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+}
+
+fn plist_value_region<'a>(plist: &'a str, key: &str) -> Option<&'a str> {
+    let marker = format!("<key>{key}</key>");
+    let start = plist.find(&marker)? + marker.len();
+    let remaining = &plist[start..];
+    let end = remaining.find("<key>").unwrap_or(remaining.len());
+    Some(&remaining[..end])
+}
+
+fn plist_string_value(plist: &str, key: &str) -> Option<String> {
+    let region = plist_value_region(plist, key)?;
+    let start = region.find("<string>")? + "<string>".len();
+    let end = region[start..].find("</string>")? + start;
+    Some(decode_plist_text(region[start..end].trim()))
+}
+
+fn plist_u64_value(plist: &str, key: &str) -> Option<u64> {
+    let region = plist_value_region(plist, key)?;
+    let start = region.find("<integer>")? + "<integer>".len();
+    let end = region[start..].find("</integer>")? + start;
+    region[start..end].trim().parse().ok()
+}
+
+fn plist_bool_value(plist: &str, key: &str) -> Option<bool> {
+    let region = plist_value_region(plist, key)?;
+    if region.contains("<true/>") || region.contains("<true />") {
+        Some(true)
+    } else if region.contains("<false/>") || region.contains("<false />") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn plist_string_array_value(plist: &str, key: &str) -> Option<Vec<String>> {
+    let region = plist_value_region(plist, key)?;
+    let start = region.find("<array>")? + "<array>".len();
+    let end = region[start..].find("</array>")? + start;
+    let mut rest = &region[start..end];
+    let mut values = Vec::new();
+    while let Some(string_start) = rest.find("<string>") {
+        let value_start = string_start + "<string>".len();
+        let Some(value_end) = rest[value_start..].find("</string>") else {
+            break;
+        };
+        let value_end = value_start + value_end;
+        let value = decode_plist_text(rest[value_start..value_end].trim());
+        if !value.is_empty() {
+            values.push(value);
+        }
+        rest = &rest[value_end + "</string>".len()..];
+    }
+    Some(values)
+}
+
+fn managed_prefs_plist() -> Option<String> {
+    if let Ok(value) = env::var(MANAGED_PREFS_TEST_PLIST_ENV) {
+        return Some(value);
+    }
+    if cfg!(test) {
+        return None;
+    }
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let output = Command::new("defaults")
+        .args(["export", MANAGED_PREFS_DOMAIN, "-"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let plist = String::from_utf8(output.stdout).ok()?;
+    if plist.trim().is_empty() {
+        None
+    } else {
+        Some(plist)
+    }
+}
+
+fn read_managed_config() -> Option<ManagedConfig> {
+    let plist = managed_prefs_plist()?;
+    let mut managed = ManagedConfig::default();
+
+    if let Some(provider) = plist_string_value(&plist, "fallbackProvider") {
+        managed.fallback_provider = match provider.as_str() {
+            "1password" => Some(ExternalFallbackProvider::OnePassword),
+            "bitwarden" => Some(ExternalFallbackProvider::Bitwarden),
+            _ => None,
+        };
+        if managed.fallback_provider.is_some() {
+            managed.managed_keys.push("fallbackProvider");
+        }
+    }
+    if let Some(path) = plist_string_value(&plist, "fallbackProviderPath") {
+        managed.fallback_provider_path = Some(path);
+        managed.managed_keys.push("fallbackProviderPath");
+    }
+    if let Some(timeout) = plist_u64_value(&plist, "fallbackProviderTimeoutMs") {
+        managed.fallback_provider_timeout_ms = Some(timeout);
+        managed.managed_keys.push("fallbackProviderTimeoutMs");
+    }
+    if let Some(max_invocations) = plist_u64_value(&plist, "fallbackProviderMaxInvocations") {
+        if let Ok(value) = u32::try_from(max_invocations) {
+            managed.fallback_provider_max_invocations = Some(value);
+            managed.managed_keys.push("fallbackProviderMaxInvocations");
+        }
+    }
+    if let Some(domains) = plist_string_array_value(&plist, "supportedDomains") {
+        managed.supported_domains = Some(domains);
+        managed.managed_keys.push("supportedDomains");
+    }
+    if let Some(disabled) = plist_bool_value(&plist, "disableDemo") {
+        managed.disable_demo = Some(disabled);
+        managed.managed_keys.push("disableDemo");
+    }
+
+    if managed.managed_keys.is_empty() {
+        None
+    } else {
+        Some(managed)
+    }
+}
+
+fn apply_managed_config(mut config: APWConfigV1, managed: &ManagedConfig) -> APWConfigV1 {
+    if let Some(provider) = managed.fallback_provider {
+        config.fallback_provider = Some(provider);
+    }
+    if let Some(path) = managed.fallback_provider_path.clone() {
+        config.fallback_provider_path = Some(path);
+    }
+    if let Some(timeout) = managed.fallback_provider_timeout_ms {
+        config.fallback_provider_timeout_ms = Some(timeout);
+    }
+    if let Some(max_invocations) = managed.fallback_provider_max_invocations {
+        config.fallback_provider_max_invocations = Some(max_invocations);
+    }
+    if let Some(domains) = managed.supported_domains.clone() {
+        config.supported_domains = domains;
+    }
+    if let Some(disabled) = managed.disable_demo {
+        config.disable_demo = Some(disabled);
+    }
+    config
+}
+
+fn user_config_has_setting(key: &str) -> bool {
+    let Ok(raw) = fs::read_to_string(config_path()) else {
+        return false;
+    };
+    let Ok(Value::Object(config)) = serde_json::from_str::<Value>(&raw) else {
+        return false;
+    };
+    let aliases: &[&str] = match key {
+        "fallbackProvider" => &["fallbackProvider", "fallback_provider"],
+        "fallbackProviderPath" => &["fallbackProviderPath", "fallback_provider_path"],
+        "fallbackProviderTimeoutMs" => {
+            &["fallbackProviderTimeoutMs", "fallback_provider_timeout_ms"]
+        }
+        "fallbackProviderMaxInvocations" => &[
+            "fallbackProviderMaxInvocations",
+            "fallback_provider_max_invocations",
+        ],
+        "supportedDomains" => &["supportedDomains", "supported_domains"],
+        "disableDemo" => &["disableDemo", "disable_demo"],
+        _ => &[key],
+    };
+    aliases
+        .iter()
+        .any(|alias| config.get(*alias).is_some_and(|value| !value.is_null()))
+}
+
+fn read_user_config_file_or_null() -> Result<APWConfigV1> {
     let path = config_path();
     let metadata = fs::symlink_metadata(&path).map_err(|_| {
         APWError::new(
@@ -183,6 +377,10 @@ fn read_config_file_or_null() -> Result<APWConfigV1> {
     Ok(normalize_legacy_config(legacy))
 }
 
+fn read_config_file_or_null() -> Result<APWConfigV1> {
+    validate_external_provider_config(read_user_config_file_or_null()?)
+}
+
 fn validate_external_provider_config(mut config: APWConfigV1) -> Result<APWConfigV1> {
     let Some(provider) = config.fallback_provider else {
         return Ok(config);
@@ -236,6 +434,8 @@ fn normalize_legacy_config(raw: APWConfig) -> APWConfigV1 {
         fallback_provider_path: None,
         fallback_provider_timeout_ms: None,
         fallback_provider_max_invocations: None,
+        supported_domains: Vec::new(),
+        disable_demo: None,
         last_launch_status: None,
         last_launch_error: None,
         last_launch_strategy: None,
@@ -248,7 +448,58 @@ fn normalize_legacy_config(raw: APWConfig) -> APWConfigV1 {
 }
 
 pub fn read_config_file() -> Result<APWConfigV1> {
-    read_config_file_or_null()
+    let user = read_user_config_file_or_null();
+    let managed = read_managed_config();
+
+    match (user, managed) {
+        (Ok(config), Some(managed_config)) => {
+            validate_external_provider_config(apply_managed_config(config, &managed_config))
+        }
+        (Ok(config), None) => validate_external_provider_config(config),
+        (Err(_error), Some(managed_config)) => {
+            let base = APWConfigV1 {
+                created_at: Utc::now().to_rfc3339(),
+                ..APWConfigV1::default()
+            };
+            validate_external_provider_config(apply_managed_config(base, &managed_config))
+        }
+        (Err(error), None) => Err(error),
+    }
+}
+
+pub fn config_provenance_details() -> Value {
+    let user_config_present = config_path().is_file();
+    let managed = read_managed_config();
+    let managed_keys = managed
+        .as_ref()
+        .map(|value| value.managed_keys.clone())
+        .unwrap_or_default();
+    let setting = |key: &'static str| {
+        json!({
+            "key": key,
+            "source": if managed_keys.contains(&key) {
+                "managed"
+            } else if user_config_has_setting(key) {
+                "user"
+            } else {
+                "default"
+            }
+        })
+    };
+
+    json!({
+        "domain": MANAGED_PREFS_DOMAIN,
+        "managed": managed.is_some(),
+        "userConfigPresent": user_config_present,
+        "settings": [
+            setting("fallbackProvider"),
+            setting("fallbackProviderPath"),
+            setting("fallbackProviderTimeoutMs"),
+            setting("fallbackProviderMaxInvocations"),
+            setting("supportedDomains"),
+            setting("disableDemo")
+        ]
+    })
 }
 
 pub fn validate_external_provider_path(
@@ -349,6 +600,8 @@ pub fn read_config_file_or_empty() -> APWConfigV1 {
         fallback_provider_path: None,
         fallback_provider_timeout_ms: None,
         fallback_provider_max_invocations: None,
+        supported_domains: Vec::new(),
+        disable_demo: None,
         created_at: Utc.timestamp_nanos(0).to_rfc3339(),
     })
 }
@@ -379,6 +632,8 @@ pub fn read_config(opts: Option<ConfigReadOptions>) -> Result<APWRuntimeConfig> 
                 fallback_provider_path: None,
                 fallback_provider_timeout_ms: None,
                 fallback_provider_max_invocations: None,
+                supported_domains: Vec::new(),
+                disable_demo: None,
                 created_at: Utc.timestamp_nanos(0).to_rfc3339(),
             });
         }
@@ -410,6 +665,8 @@ pub fn read_config(opts: Option<ConfigReadOptions>) -> Result<APWRuntimeConfig> 
             fallback_provider_path: None,
             fallback_provider_timeout_ms: None,
             fallback_provider_max_invocations: None,
+            supported_domains: Vec::new(),
+            disable_demo: None,
             created_at: Utc.timestamp_nanos(0).to_rfc3339(),
         });
     }
@@ -440,6 +697,8 @@ pub fn read_config(opts: Option<ConfigReadOptions>) -> Result<APWRuntimeConfig> 
             fallback_provider_path: raw.fallback_provider_path,
             fallback_provider_timeout_ms: raw.fallback_provider_timeout_ms,
             fallback_provider_max_invocations: raw.fallback_provider_max_invocations,
+            supported_domains: raw.supported_domains,
+            disable_demo: raw.disable_demo,
             created_at: raw.created_at,
         });
     }
@@ -508,6 +767,8 @@ pub fn read_config(opts: Option<ConfigReadOptions>) -> Result<APWRuntimeConfig> 
         fallback_provider_path: raw.fallback_provider_path,
         fallback_provider_timeout_ms: raw.fallback_provider_timeout_ms,
         fallback_provider_max_invocations: raw.fallback_provider_max_invocations,
+        supported_domains: raw.supported_domains,
+        disable_demo: raw.disable_demo,
         created_at: raw.created_at,
     })
 }
@@ -532,7 +793,7 @@ pub fn clear_config() {
 pub fn write_config(input: WriteConfigInput) -> Result<APWConfigV1> {
     ensure_config_directory()?;
 
-    let existing = read_config_file().ok();
+    let existing = read_config_file_or_null().ok();
     let clear_auth = input.clear_auth;
     let port = input
         .port
@@ -738,6 +999,11 @@ pub fn write_config(input: WriteConfigInput) -> Result<APWConfigV1> {
         fallback_provider_max_invocations: existing
             .as_ref()
             .and_then(|value| value.fallback_provider_max_invocations),
+        supported_domains: existing
+            .as_ref()
+            .map(|value| value.supported_domains.clone())
+            .unwrap_or_default(),
+        disable_demo: existing.as_ref().and_then(|value| value.disable_demo),
     };
 
     let mut serialized = serde_json::to_string_pretty(&updated).map_err(|error| {
@@ -915,6 +1181,38 @@ mod tests {
         config_root().join("config.json")
     }
 
+    fn managed_prefs_plist_for_test(provider_path: &Path) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>fallbackProvider</key>
+  <string>1password</string>
+  <key>fallbackProviderPath</key>
+  <string>{}</string>
+  <key>fallbackProviderTimeoutMs</key>
+  <integer>2500</integer>
+  <key>fallbackProviderMaxInvocations</key>
+  <integer>2</integer>
+  <key>supportedDomains</key>
+  <array>
+    <string>example.com</string>
+    <string>login.example.com</string>
+  </array>
+  <key>disableDemo</key>
+  <true/>
+</dict>
+</plist>"#,
+            provider_path.display()
+        )
+    }
+
+    fn write_test_provider(path: &Path) {
+        fs::write(path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
     #[test]
     #[serial]
     fn read_config_migrates_legacy_shape() {
@@ -955,6 +1253,96 @@ mod tests {
             assert_eq!(runtime.port, 10_012);
             assert_eq!(runtime.host, "127.0.0.1");
             assert_eq!(runtime.created_at, created_at.to_string());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn read_config_applies_managed_preferences_before_user_config() {
+        with_temp_home(|| {
+            let managed_provider = config_root().join("managed-provider");
+            let user_provider = config_root().join("user-provider");
+            fs::create_dir_all(config_root()).unwrap();
+            write_test_provider(&managed_provider);
+            write_test_provider(&user_provider);
+
+            let user = APWConfigV1 {
+                username: "alice".to_string(),
+                shared_key: bigint_to_base64(&1u32.into()),
+                fallback_provider: Some(ExternalFallbackProvider::Bitwarden),
+                fallback_provider_path: Some(user_provider.display().to_string()),
+                fallback_provider_timeout_ms: Some(9000),
+                fallback_provider_max_invocations: Some(9),
+                supported_domains: vec!["user.example.com".to_string()],
+                disable_demo: Some(false),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_path_for_test(),
+                serde_json::to_string(&user).unwrap(),
+            )
+            .unwrap();
+
+            env::set_var(
+                MANAGED_PREFS_TEST_PLIST_ENV,
+                managed_prefs_plist_for_test(&managed_provider),
+            );
+            let config = read_config_file().unwrap();
+            let runtime = read_config(Some(ConfigReadOptions {
+                require_auth: false,
+                max_age_ms: SESSION_MAX_AGE_MS,
+                ignore_expiry: true,
+            }))
+            .unwrap();
+            env::remove_var(MANAGED_PREFS_TEST_PLIST_ENV);
+
+            assert_eq!(
+                config.fallback_provider,
+                Some(ExternalFallbackProvider::OnePassword)
+            );
+            assert_eq!(
+                config.fallback_provider_path.as_deref(),
+                Some(managed_provider.canonicalize().unwrap().to_str().unwrap())
+            );
+            assert_eq!(config.fallback_provider_timeout_ms, Some(2500));
+            assert_eq!(config.fallback_provider_max_invocations, Some(2));
+            assert_eq!(
+                config.supported_domains,
+                vec!["example.com", "login.example.com"]
+            );
+            assert_eq!(config.disable_demo, Some(true));
+            assert_eq!(
+                runtime.supported_domains,
+                vec!["example.com", "login.example.com"]
+            );
+            assert_eq!(runtime.disable_demo, Some(true));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn config_provenance_reports_specific_setting_sources() {
+        with_temp_home(|| {
+            fs::create_dir_all(config_root()).unwrap();
+            fs::write(
+                config_path_for_test(),
+                r#"{"schema":1,"port":10000,"host":"127.0.0.1","username":"alice","sharedKey":"","createdAt":"1970-01-01T00:00:00+00:00","fallbackProvider":null,"disableDemo":false}"#,
+            )
+            .unwrap();
+
+            let details = config_provenance_details();
+            let settings = details["settings"].as_array().unwrap();
+            let source_for = |key: &str| {
+                settings
+                    .iter()
+                    .find(|setting| setting["key"] == key)
+                    .and_then(|setting| setting["source"].as_str())
+                    .unwrap()
+            };
+
+            assert_eq!(source_for("disableDemo"), "user");
+            assert_eq!(source_for("fallbackProvider"), "default");
+            assert_eq!(source_for("supportedDomains"), "default");
         });
     }
 
@@ -1024,6 +1412,8 @@ mod tests {
                 fallback_provider_path: None,
                 fallback_provider_timeout_ms: None,
                 fallback_provider_max_invocations: None,
+                supported_domains: Vec::new(),
+                disable_demo: None,
                 created_at: (chrono::Utc::now() - chrono::Duration::days(40)).to_rfc3339(),
                 runtime_mode: RuntimeMode::Auto,
                 last_launch_status: None,
@@ -1083,6 +1473,8 @@ mod tests {
                 fallback_provider_path: None,
                 fallback_provider_timeout_ms: None,
                 fallback_provider_max_invocations: None,
+                supported_domains: Vec::new(),
+                disable_demo: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 runtime_mode: RuntimeMode::Auto,
                 last_launch_status: None,
@@ -1159,6 +1551,8 @@ mod tests {
                 fallback_provider_path: None,
                 fallback_provider_timeout_ms: None,
                 fallback_provider_max_invocations: None,
+                supported_domains: Vec::new(),
+                disable_demo: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 runtime_mode: RuntimeMode::Auto,
                 last_launch_status: None,
