@@ -291,7 +291,7 @@ pub struct DoctorCommand {
     /// Emit only the structured environment-check array. Useful for CI
     /// jobs that want to grep `[FAIL]` lines or parse the JSON shape.
     /// See issue #12.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "bundle")]
     pub ci: bool,
     /// Write a redacted diagnostic bundle (tar.gz) to the given path so
     /// it can be attached to support requests. The bundle excludes
@@ -1178,6 +1178,18 @@ mod tests {
             Commands::Doctor(_) => {}
             _ => panic!("expected doctor command"),
         }
+    }
+
+    #[test]
+    fn doctor_ci_and_bundle_are_mutually_exclusive() {
+        let parsed = Cli::try_parse_from([
+            "apw",
+            "doctor",
+            "--ci",
+            "--bundle",
+            "/tmp/apw-doctor-bundle.tar.gz",
+        ]);
+        assert!(parsed.is_err());
     }
 
     #[test]
