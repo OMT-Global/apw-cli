@@ -622,6 +622,8 @@ impl ApplePasswordManager {
             fallback_provider_path: None,
             fallback_provider_timeout_ms: None,
             fallback_provider_max_invocations: None,
+            supported_domains: Vec::new(),
+            disable_demo: None,
             created_at: Utc::now().timestamp().to_string(),
         });
 
@@ -1072,6 +1074,8 @@ impl ApplePasswordManager {
             fallback_provider_path: None,
             fallback_provider_timeout_ms: None,
             fallback_provider_max_invocations: None,
+            supported_domains: Vec::new(),
+            disable_demo: None,
             created_at: Utc::now().timestamp().to_string(),
         });
 
@@ -2682,6 +2686,8 @@ mod tests {
                 fallback_provider_path: None,
                 fallback_provider_timeout_ms: None,
                 fallback_provider_max_invocations: None,
+                supported_domains: Vec::new(),
+                disable_demo: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 runtime_mode: RuntimeMode::Auto,
                 last_launch_status: None,
@@ -2776,6 +2782,8 @@ mod tests {
                 fallback_provider_path: None,
                 fallback_provider_timeout_ms: None,
                 fallback_provider_max_invocations: None,
+                supported_domains: Vec::new(),
+                disable_demo: None,
                 created_at: (chrono::Utc::now() - chrono::Duration::days(45)).to_rfc3339(),
                 runtime_mode: RuntimeMode::Auto,
                 last_launch_status: None,
