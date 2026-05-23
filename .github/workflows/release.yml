@@ -102,6 +102,17 @@ jobs:
       - name: Build native app bundle
         run: ./scripts/build-native-app.sh
 
+      - name: Sign and notarize native app bundle
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          APPLE_DEVELOPER_CERT_P12: ${{ secrets.APPLE_DEVELOPER_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_KEY_ISSUER: ${{ secrets.APPLE_NOTARY_KEY_ISSUER }}
+          APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
+        run: bash scripts/notarize-native-app.sh
+
       - name: Homebrew smoke install from source tarball
         env:
           APW_SRC_TARBALL: ${{ steps.source_tarball.outputs.path }}
