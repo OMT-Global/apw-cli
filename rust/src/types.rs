@@ -170,6 +170,13 @@ pub struct APWConfigV1 {
     pub bridge_last_error: Option<String>,
     #[serde(rename = "secretSource", default)]
     pub secret_source: Option<SecretSource>,
+    #[serde(
+        rename = "supportedDomains",
+        alias = "supported_domains",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub supported_domains: Vec<String>,
     #[serde(rename = "fallbackProvider", alias = "fallback_provider", default)]
     pub fallback_provider: Option<ExternalFallbackProvider>,
     #[serde(
@@ -214,6 +221,7 @@ impl Default for APWConfigV1 {
             bridge_connected_at: None,
             bridge_last_error: None,
             secret_source: Some(SecretSource::File),
+            supported_domains: Vec::new(),
             fallback_provider: None,
             fallback_provider_path: None,
             fallback_provider_timeout_ms: None,

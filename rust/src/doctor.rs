@@ -247,17 +247,27 @@ fn check_native_app_bundle() -> DoctorCheck {
     .with_remediation("Run `./scripts/build-native-app.sh`, then `apw app install`.")
 }
 
-/// Probe each configured associated domain for a reachable AASA file.
-/// Domains are read from `APW_AASA_DOMAINS` (comma-separated) so this can
-/// be wired ahead of the `supportedDomains` config field landing. See
-/// issue #8.
-fn check_associated_domains() -> Option<DoctorCheck> {
-    let raw = std::env::var("APW_AASA_DOMAINS").ok()?;
-    let domains: Vec<&str> = raw
-        .split(',')
+fn parse_domain_list(raw: &str) -> Vec<String> {
+    raw.split(',')
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
+        .filter(|domain| !domain.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn configured_associated_domains() -> Vec<String> {
+    if let Ok(raw) = std::env::var("APW_AASA_DOMAINS") {
+        return parse_domain_list(&raw);
+    }
+    crate::utils::read_config_file_or_empty().supported_domains
+}
+
+/// Probe each configured associated domain for a reachable AASA file.
+/// Domains come from `supportedDomains` in `~/.apw/config.json`. The
+/// `APW_AASA_DOMAINS` environment variable remains a comma-separated override
+/// for CI and one-off operator validation. See issue #8.
+fn check_associated_domains() -> Option<DoctorCheck> {
+    let domains = configured_associated_domains();
     if domains.is_empty() {
         return None;
     }
@@ -347,6 +357,48 @@ pub fn checks_to_json(checks: &[DoctorCheck]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+    use std::fs;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    fn with_temp_home<F>(run: F)
+    where
+        F: FnOnce(&Path),
+    {
+        let temp = TempDir::new().expect("failed to create temp home");
+        let previous_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", temp.path());
+
+        run(temp.path());
+
+        if let Some(previous_home) = previous_home {
+            std::env::set_var("HOME", previous_home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
+
+    fn write_supported_domains_config(home: &Path, domains: &[&str]) {
+        let config = json!({
+            "schema": 1,
+            "port": 10000,
+            "host": "127.0.0.1",
+            "username": "",
+            "sharedKey": "",
+            "runtimeMode": "auto",
+            "secretSource": "file",
+            "supportedDomains": domains,
+            "createdAt": "2026-05-23T00:00:00Z"
+        });
+        let apw_dir = home.join(".apw");
+        fs::create_dir_all(&apw_dir).expect("failed to create .apw");
+        fs::write(
+            apw_dir.join("config.json"),
+            serde_json::to_vec_pretty(&config).expect("failed to encode config"),
+        )
+        .expect("failed to write config");
+    }
 
     #[test]
     fn check_status_label_is_uppercase() {
@@ -407,12 +459,16 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn associated_domains_check_skipped_when_env_unset() {
-        std::env::remove_var("APW_AASA_DOMAINS");
-        assert!(check_associated_domains().is_none());
+        with_temp_home(|_| {
+            std::env::remove_var("APW_AASA_DOMAINS");
+            assert!(check_associated_domains().is_none());
+        });
     }
 
     #[test]
+    #[serial]
     fn associated_domains_check_reports_failure_for_unreachable_host() {
         // Use a guaranteed-unreachable .invalid TLD (RFC 2606). curl will
         // exit non-zero so the probe returns None and the check fails.
@@ -421,5 +477,23 @@ mod tests {
         std::env::remove_var("APW_AASA_DOMAINS");
         assert_eq!(check.status, CheckStatus::Fail);
         assert!(check.message.contains("unreachable"));
+    }
+
+    #[test]
+    #[serial]
+    fn associated_domains_check_reads_supported_domains_config() {
+        with_temp_home(|home| {
+            std::env::remove_var("APW_AASA_DOMAINS");
+            write_supported_domains_config(home, &["definitely-not-a-real-host.invalid"]);
+
+            let check = check_associated_domains().expect("expected an AASA check");
+
+            assert_eq!(check.status, CheckStatus::Fail);
+            assert!(check.message.contains("definitely-not-a-real-host.invalid"));
+            assert!(check
+                .remediation
+                .unwrap_or_default()
+                .contains("DOMAIN_EXPANSION"));
+        });
     }
 }

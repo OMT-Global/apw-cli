@@ -19,9 +19,11 @@ This document is the operator playbook for that work.
 
 ## Step 1: list the domains in `~/.apw/config.json`
 
-Add (or update) the `supportedDomains` array in the user config. The
-field is validated against the bundle's `Associated Domains` entitlement
-at runtime, so it cannot claim more domains than the app is entitled to.
+Add (or update) the `supportedDomains` array in the user config. `apw doctor`
+uses this field to probe each domain's AASA file before a production rollout.
+The app still cannot return credentials for domains missing from the signed
+`Associated Domains` entitlement, so config may narrow the active set but cannot
+expand beyond the shipped entitlement.
 
 ```json
 {
@@ -93,10 +95,11 @@ apw app install
 
 ## Step 5: verify with `apw doctor`
 
-Run `apw doctor --json` after install. The `app.frameworks` block
-reports the entitlement domains the bundle was signed with, and the
-`environment` array (issue #12) probes reachability of each AASA file
-under `app.aasa[]`. Any check that fails surfaces a remediation hint.
+Run `apw doctor --json` after install. The `environment` array includes an
+`associated-domains` check when `supportedDomains` is configured and probes
+reachability of each AASA file. Any check that fails surfaces a remediation
+hint. CI or one-off validation can override the config with a comma-separated
+`APW_AASA_DOMAINS` value.
 
 ## Long-term plan
 
