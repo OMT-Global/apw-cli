@@ -12,6 +12,7 @@ repo:
     - AGENTS.md
     - CLAUDE.md
     - CODEOWNERS
+    - SECURITY.md
     - .githooks/**
     - .devcontainer/**
     - .github/workflows/pr-fast-ci.yml
@@ -26,7 +27,7 @@ repo:
   docs:
     readme: true
     contributing: false
-    security: false
+    security: true
   templates:
     pullRequest: standard
     issueTemplates:

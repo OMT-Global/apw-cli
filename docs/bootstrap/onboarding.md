@@ -25,6 +25,7 @@
     - Confirm branch protection points at the `CI Gate` status.
     - Confirm `delete branch on merge` and `allow auto-merge` are enabled.
     - Confirm projects and wiki are disabled in live repository settings.
+    - Confirm the GitHub Security Policy surface is enabled from `SECURITY.md`.
     - Confirm `dev`, `stage`, and `prod` GitHub environments exist with the reviewer gates described below.
 
     ## Environments
