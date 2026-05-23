@@ -76,7 +76,8 @@ For local formula validation from this checkout:
 ```
 
 The formula template is kept in
-[`packaging/homebrew/apw.rb`](packaging/homebrew/apw.rb).
+[`packaging/homebrew/apw.rb.template`](packaging/homebrew/apw.rb.template) and can be rendered with
+`scripts/render-homebrew-formula.sh <version> <sha256>`.
 
 ## Quick start
 
@@ -87,12 +88,27 @@ The supported `v2.0.0` bootstrap flow is app-first:
 apw app install
 apw app launch
 apw doctor --json
-apw login https://example.com
+apw login https://vault.example.com
 ```
 
-The current bootstrap domain is `https://example.com`. The APW app uses a
-same-user local broker socket and explicit approval UI for the returned
-credential flow.
+In a notarized build with associated-domain entitlements wired,
+`apw login` routes through the
+[`AuthenticationServicesBroker`](native-app/Sources/NativeAppLib/AuthenticationServicesBroker.swift)
+and returns an iCloud Keychain credential surfaced via the Apple
+credential picker (issue #13).
+
+A separate **demo bootstrap path** is available for first-run
+validation. Setting `APW_DEMO=1` makes the broker materialize and
+return the bundled placeholder credential for `https://example.com` —
+nothing else. Without `APW_DEMO=1`, the demo path returns a typed
+`no_credential_source` error rather than silently falling back to a
+plaintext file (issue #14):
+
+```bash
+APW_DEMO=1 apw app install
+APW_DEMO=1 apw app launch
+APW_DEMO=1 apw login https://example.com
+```
 
 Optional reduced-security mode for external password managers can be configured
 in `~/.apw/config.json` with an absolute provider path:
@@ -104,8 +120,13 @@ in `~/.apw/config.json` with an absolute provider path:
 }
 ```
 
-Supported fallback providers are `1password` and `bitwarden`. APW does not
-cache external-provider credentials.
+Supported fallback providers are `1password` and `bitwarden`. Configuration alone
+does not activate fallback for `apw login`; callers must pass
+`apw login --external-fallback <url>` to explicitly choose this reduced-security
+path when the native broker is unavailable or returns no results. JSON fallback
+payloads use `transport: "external_cli"`, `securityMode: "reduced_external_cli"`,
+and `externalFallbackExplicit: true` so automation can distinguish them from
+native broker approvals. APW does not cache external-provider credentials.
 
 ## Common commands
 

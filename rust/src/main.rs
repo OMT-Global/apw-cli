@@ -3,6 +3,7 @@ use clap::Parser;
 mod cli;
 mod client;
 mod daemon;
+mod doctor;
 mod error;
 mod host;
 mod logging;

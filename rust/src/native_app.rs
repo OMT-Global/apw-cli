@@ -1,7 +1,7 @@
 use crate::error::{APWError, Result};
 use crate::logging;
-use crate::types::{ExternalFallbackProvider, Status, MAX_MESSAGE_BYTES, VERSION};
-use crate::utils::read_config_file_or_empty;
+use crate::types::{APWConfigV1, ExternalFallbackProvider, Status, MAX_MESSAGE_BYTES, VERSION};
+use crate::utils::{read_config_file, read_config_file_or_empty, validate_external_provider_path};
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
@@ -12,7 +12,7 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const NATIVE_APP_BUNDLE_NAME: &str = "APW.app";
 const NATIVE_APP_EXECUTABLE_NAME: &str = "APW";
@@ -25,8 +25,28 @@ const NATIVE_APP_FILE_MODE: u32 = 0o600;
 const MAX_BROKER_BYTES: usize = MAX_MESSAGE_BYTES;
 const MAX_BROKER_LOG_BYTES: u64 = 10 * 1024 * 1024;
 const NATIVE_APP_SOCKET_TIMEOUT_MS: u64 = 3_000;
+const NATIVE_APP_DIRECT_EXEC_TIMEOUT_MS: u64 = 5_000;
+const DOCTOR_PROBE_TIMEOUT_MS: u64 = 3_000;
+const BOUNDED_COMMAND_POLL_MS: u64 = 20;
+const EXTERNAL_PROVIDER_DEFAULT_TIMEOUT_MS: u64 = 5_000;
+const EXTERNAL_PROVIDER_DEFAULT_MAX_INVOCATIONS: u32 = 10;
+const EXTERNAL_PROVIDER_POLL_MS: u64 = 20;
 const CONNECT_RETRIES: usize = 10;
 const CONNECT_RETRY_DELAY_MS: u64 = 200;
+
+fn diagnostic(
+    status: &str,
+    id: &str,
+    message: impl Into<String>,
+    hint: impl Into<String>,
+) -> Value {
+    json!({
+        "id": id,
+        "status": status,
+        "message": message.into(),
+        "hint": hint.into(),
+    })
+}
 
 fn home_dir() -> PathBuf {
     match env::var("HOME").or_else(|_| env::var("USERPROFILE")) {
@@ -124,6 +144,10 @@ pub fn native_app_broker_log_path() -> PathBuf {
     native_app_runtime_dir().join(NATIVE_APP_BROKER_LOG_NAME)
 }
 
+fn native_app_fallback_provider_state_path() -> PathBuf {
+    native_app_runtime_dir().join("fallback-provider-session.json")
+}
+
 pub fn native_app_install_dir() -> PathBuf {
     native_app_runtime_dir().join("installed")
 }
@@ -142,6 +166,7 @@ pub fn native_app_executable_in_bundle(bundle_path: &Path) -> PathBuf {
 fn resolve_packaged_native_app_bundle() -> Result<PathBuf> {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut candidates = vec![
+        cwd.join(NATIVE_APP_BUNDLE_NAME),
         cwd.join("native-app")
             .join("dist")
             .join(NATIVE_APP_BUNDLE_NAME),
@@ -155,6 +180,7 @@ fn resolve_packaged_native_app_bundle() -> Result<PathBuf> {
 
     if let Ok(exe) = env::current_exe() {
         if let Some(parent) = exe.parent() {
+            candidates.push(parent.join(NATIVE_APP_BUNDLE_NAME));
             candidates.push(
                 parent
                     .join("../libexec")
@@ -216,6 +242,285 @@ fn load_status_file() -> Option<Value> {
     serde_json::from_str(&fs::read_to_string(native_app_status_path()).ok()?).ok()
 }
 
+/// Outcome of running a bounded child command. The buffers are capped so a
+/// runaway external tool cannot exhaust CLI memory before we react to it.
+#[derive(Debug)]
+struct BoundedCommandOutput {
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+/// Error returned when a child process is bounded by either a wall-clock
+/// timeout or a per-stream byte cap. Both shapes give doctor diagnostics
+/// (#39) and the direct-exec fallback (#42) a clear structured failure to
+/// report instead of hanging or buffering unbounded output.
+#[derive(Debug)]
+enum BoundedCommandError {
+    Spawn(std::io::Error),
+    Io(std::io::Error),
+    TimedOut { elapsed_ms: u128 },
+    OutputTooLarge,
+}
+
+impl BoundedCommandError {
+    fn message(&self, command: &str) -> String {
+        match self {
+            Self::Spawn(error) => format!("Failed to launch {command}: {error}"),
+            Self::Io(error) => format!("Failed to read output from {command}: {error}"),
+            Self::TimedOut { elapsed_ms } => {
+                format!("{command} did not finish within {elapsed_ms}ms and was terminated.")
+            }
+            Self::OutputTooLarge => {
+                format!("{command} produced more output than the configured cap allows.")
+            }
+        }
+    }
+}
+
+/// Run `command args` and return its bounded stdout/stderr, terminating the
+/// child if it runs longer than `timeout` or emits more than `max_bytes` on
+/// either stream. Replaces a previous `Command::output()` call that allowed
+/// a hung or chatty external tool to block the caller or buffer unbounded
+/// output. See issues #39 (doctor CI diagnostics) and #42 (direct-exec
+/// fallback).
+fn run_bounded_command(
+    command: &str,
+    args: &[&str],
+    timeout: Duration,
+    max_bytes: usize,
+) -> std::result::Result<BoundedCommandOutput, BoundedCommandError> {
+    let mut command_builder = Command::new(command);
+    command_builder
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // SAFETY: `pre_exec` runs after fork and before exec. The closure only
+    // calls `libc::setsid()`, which is async-signal-safe. Putting the child
+    // in its own process group lets us deliver SIGKILL to any orphaned
+    // grandchildren on timeout instead of leaking pipes when the immediate
+    // child is a shell that has forked a long-running tool.
+    unsafe {
+        command_builder.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let mut child = command_builder
+        .spawn()
+        .map_err(BoundedCommandError::Spawn)?;
+    let pid = child.id() as i32;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| BoundedCommandError::Io(std::io::Error::other("missing stdout pipe")))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| BoundedCommandError::Io(std::io::Error::other("missing stderr pipe")))?;
+
+    let stdout_cap = max_bytes;
+    let stderr_cap = max_bytes;
+    let stdout_reader = std::thread::spawn(move || {
+        let mut buffer = Vec::with_capacity(stdout_cap.min(8 * 1024));
+        stdout
+            .take((stdout_cap + 1) as u64)
+            .read_to_end(&mut buffer)
+            .map(|_| buffer)
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut buffer = Vec::with_capacity(stderr_cap.min(8 * 1024));
+        stderr
+            .take((stderr_cap + 1) as u64)
+            .read_to_end(&mut buffer)
+            .map(|_| buffer)
+    });
+
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if started.elapsed() >= timeout {
+                    // Kill the entire process group so an orphaned tool that
+                    // inherited our stdout pipe (e.g. `sh -c 'sleep 30'`) is
+                    // also reaped and the reader threads can drain.
+                    unsafe {
+                        libc::kill(-pid, libc::SIGKILL);
+                    }
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stdout_reader.join();
+                    let _ = stderr_reader.join();
+                    return Err(BoundedCommandError::TimedOut {
+                        elapsed_ms: started.elapsed().as_millis(),
+                    });
+                }
+                std::thread::sleep(Duration::from_millis(BOUNDED_COMMAND_POLL_MS));
+            }
+            Err(error) => return Err(BoundedCommandError::Io(error)),
+        }
+    };
+
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| BoundedCommandError::Io(std::io::Error::other("stdout reader panicked")))?
+        .map_err(BoundedCommandError::Io)?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| BoundedCommandError::Io(std::io::Error::other("stderr reader panicked")))?
+        .map_err(BoundedCommandError::Io)?;
+
+    if stdout.len() > max_bytes || stderr.len() > max_bytes {
+        return Err(BoundedCommandError::OutputTooLarge);
+    }
+
+    Ok(BoundedCommandOutput {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn command_version_check(id: &str, command: &str, args: &[&str], hint: &str) -> Value {
+    let timeout = Duration::from_millis(DOCTOR_PROBE_TIMEOUT_MS);
+    match run_bounded_command(command, args, timeout, MAX_BROKER_BYTES) {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let first_line = stdout
+                .lines()
+                .chain(stderr.lines())
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("available")
+                .trim()
+                .to_string();
+            diagnostic("OK", id, first_line, "")
+        }
+        Ok(output) => diagnostic(
+            "FAIL",
+            id,
+            format!("{command} exited with status {}", output.status),
+            hint,
+        ),
+        Err(BoundedCommandError::Spawn(_)) => {
+            diagnostic("FAIL", id, format!("{command} was not found"), hint)
+        }
+        Err(error) => diagnostic("FAIL", id, error.message(command), hint),
+    }
+}
+
+fn code_signing_identity_check() -> Value {
+    let timeout = Duration::from_millis(DOCTOR_PROBE_TIMEOUT_MS);
+    match run_bounded_command(
+        "security",
+        &["find-identity", "-v", "-p", "codesigning"],
+        timeout,
+        MAX_BROKER_BYTES,
+    ) {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.contains("Developer ID Application") {
+                diagnostic(
+                    "OK",
+                    "developer_id_identity",
+                    "Developer ID Application identity found",
+                    "",
+                )
+            } else {
+                diagnostic(
+                    "WARN",
+                    "developer_id_identity",
+                    "No Developer ID Application signing identity was found",
+                    "Install the release signing certificate before notarized release builds.",
+                )
+            }
+        }
+        Ok(output) => diagnostic(
+            "WARN",
+            "developer_id_identity",
+            format!(
+                "security find-identity exited with status {}",
+                output.status
+            ),
+            "Run `security find-identity -v -p codesigning` on the release runner.",
+        ),
+        Err(BoundedCommandError::Spawn(_)) => diagnostic(
+            "WARN",
+            "developer_id_identity",
+            "security CLI was not found",
+            "Run release signing diagnostics on macOS with Xcode command line tools installed.",
+        ),
+        Err(error) => diagnostic(
+            "WARN",
+            "developer_id_identity",
+            error.message("security find-identity"),
+            "Run `security find-identity -v -p codesigning` on the release runner.",
+        ),
+    }
+}
+
+fn ci_runner_environment_check() -> Value {
+    if env::var("CI").map(|value| value == "true").unwrap_or(false) {
+        let runner_os = env::var("RUNNER_OS").unwrap_or_else(|_| "unknown".to_string());
+        let runner_arch = env::var("RUNNER_ARCH").unwrap_or_else(|_| "unknown".to_string());
+        let runner_labels = env::var("RUNNER_LABELS")
+            .or_else(|_| env::var("APW_RUNNER_LABELS"))
+            .unwrap_or_default();
+        if runner_labels.is_empty() {
+            return diagnostic(
+                "WARN",
+                "runner_labels",
+                format!("CI runner reports os={runner_os}, arch={runner_arch}, but labels are not exposed"),
+                "Confirm the workflow runs on the documented self-hosted labels in docs/bootstrap/onboarding.md.",
+            );
+        }
+        return diagnostic(
+            "OK",
+            "runner_labels",
+            format!("CI runner labels: {runner_labels}; os={runner_os}; arch={runner_arch}"),
+            "",
+        );
+    }
+
+    diagnostic(
+        "WARN",
+        "runner_labels",
+        "Not running in GitHub Actions; runner labels cannot be verified locally",
+        "In CI, confirm shell-safe jobs use [self-hosted, synology, shell-only, public] and extended macOS validation uses [self-hosted, private, macOS, ARM64, xcode].",
+    )
+}
+
+fn ci_diagnostic_checks() -> Vec<Value> {
+    vec![
+        command_version_check(
+            "xcodebuild",
+            "xcodebuild",
+            &["-version"],
+            "Install Xcode and select it with `sudo xcode-select -s /Applications/Xcode.app`.",
+        ),
+        command_version_check(
+            "cargo",
+            "cargo",
+            &["--version"],
+            "Install Rust from https://rustup.rs/ before running Rust or release validation.",
+        ),
+        command_version_check(
+            "detect_secrets",
+            "detect-secrets",
+            &["--version"],
+            "Install detect-secrets or run the repo's configured secret scan environment.",
+        ),
+        code_signing_identity_check(),
+        ci_runner_environment_check(),
+    ]
+}
+
 fn rotate_broker_log_if_needed(path: &Path) -> Result<()> {
     let metadata = match fs::metadata(path) {
         Ok(value) => value,
@@ -270,6 +575,9 @@ fn default_credentials_payload() -> Value {
 fn ensure_default_credentials_file() -> Result<()> {
     let path = native_app_credentials_path();
     if path.exists() {
+        return Ok(());
+    }
+    if env::var("APW_DEMO").ok().as_deref() != Some("1") {
         return Ok(());
     }
     let content = serde_json::to_vec_pretty(&default_credentials_payload()).map_err(|error| {
@@ -463,23 +771,34 @@ fn send_request_via_executable(command: &str, payload: Value) -> Result<Value> {
             format!("Failed to encode native app fallback request: {error}"),
         )
     })?;
-    let output = Command::new(&executable)
-        .arg("request")
-        .arg(command)
-        .arg(payload_arg)
-        .output()
-        .map_err(|error| {
-            APWError::new(
-                Status::ProcessNotRunning,
-                format!("Failed to execute the APW app directly: {error}"),
-            )
-        })?;
-    if output.stdout.len() > MAX_BROKER_BYTES {
-        return Err(APWError::new(
+    let executable_str = executable.to_string_lossy().into_owned();
+    let timeout = Duration::from_millis(NATIVE_APP_DIRECT_EXEC_TIMEOUT_MS);
+    let output = run_bounded_command(
+        &executable_str,
+        &["request", command, &payload_arg],
+        timeout,
+        MAX_BROKER_BYTES,
+    )
+    .map_err(|error| match error {
+        BoundedCommandError::Spawn(error) => APWError::new(
+            Status::ProcessNotRunning,
+            format!("Failed to execute the APW app directly: {error}"),
+        ),
+        BoundedCommandError::Io(error) => APWError::new(
+            Status::CommunicationTimeout,
+            format!("Failed to read direct response from the APW app: {error}"),
+        ),
+        BoundedCommandError::TimedOut { elapsed_ms } => APWError::new(
+            Status::CommunicationTimeout,
+            format!(
+                "APW app direct execution did not respond within {elapsed_ms}ms and was terminated."
+            ),
+        ),
+        BoundedCommandError::OutputTooLarge => APWError::new(
             Status::ProtoInvalidResponse,
             "Native app direct response payload too large.",
-        ));
-    }
+        ),
+    })?;
     let value: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
         APWError::new(
             Status::ProtoInvalidResponse,
@@ -493,6 +812,20 @@ fn uuid_like_suffix() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
     format!("{:016x}{:016x}", rng.gen::<u64>(), rng.gen::<u64>())
+}
+
+fn external_fallback_status() -> Value {
+    let config = read_config_file_or_empty();
+    let provider_path = config.fallback_provider_path.unwrap_or_default();
+    json!({
+        "configured": config.fallback_provider.is_some(),
+        "provider": config.fallback_provider.map(|provider| provider.as_str()),
+        "providerPathConfigured": !provider_path.is_empty(),
+        "providerPathAbsolute": Path::new(&provider_path).is_absolute(),
+        "requiresExplicitLoginFlag": true,
+        "loginFlag": "--external-fallback",
+        "securityMode": "reduced_external_cli"
+    })
 }
 
 pub fn native_app_status() -> Value {
@@ -510,6 +843,7 @@ pub fn native_app_status() -> Value {
         "socketPath": native_app_socket_path(),
         "credentialsPath": native_app_credentials_path(),
         "brokerLogPath": native_app_broker_log_path(),
+        "externalFallback": external_fallback_status(),
         "service": {
             "running": socket_running(),
             "statusFile": native_app_status_path(),
@@ -553,6 +887,7 @@ pub fn native_app_doctor() -> Result<Value> {
                 format!("Inspect broker logs at {}.", native_app_broker_log_path().display())
             ]),
         );
+        object.insert("ciDiagnostics".to_string(), json!(ci_diagnostic_checks()));
     }
     Ok(doctor)
 }
@@ -675,12 +1010,14 @@ pub fn native_app_launch() -> Result<Value> {
     }))
 }
 
-pub fn native_app_login(url: &str) -> Result<Value> {
+pub fn native_app_login(url: &str, allow_external_fallback: bool) -> Result<Value> {
     match native_app_request("login", url) {
         Ok(payload) => Ok(payload),
         Err(error) if matches!(error.code, Status::NoResults | Status::ProcessNotRunning) => {
-            if let Some(payload) = external_provider_login(url)? {
-                return Ok(payload);
+            if allow_external_fallback {
+                if let Some(payload) = external_provider_login(url)? {
+                    return Ok(payload);
+                }
             }
             Err(error)
         }
@@ -697,8 +1034,240 @@ fn native_app_request(intent: &str, url: &str) -> Result<Value> {
     Ok(payload)
 }
 
+struct ExternalProviderLimits {
+    session_id: String,
+    timeout_ms: u64,
+    max_invocations: u32,
+}
+
+struct ExternalProviderCommandOutput {
+    success: bool,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+fn external_provider_limits(config: &APWConfigV1) -> ExternalProviderLimits {
+    ExternalProviderLimits {
+        session_id: config.created_at.clone(),
+        timeout_ms: config
+            .fallback_provider_timeout_ms
+            .filter(|value| *value > 0)
+            .unwrap_or(EXTERNAL_PROVIDER_DEFAULT_TIMEOUT_MS),
+        max_invocations: config
+            .fallback_provider_max_invocations
+            .unwrap_or(EXTERNAL_PROVIDER_DEFAULT_MAX_INVOCATIONS),
+    }
+}
+
+fn reserve_external_provider_invocation(
+    provider: ExternalFallbackProvider,
+    limits: &ExternalProviderLimits,
+) -> Result<()> {
+    ensure_runtime_dir()?;
+    let path = native_app_fallback_provider_state_path();
+    let state = fs::read_to_string(&path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok());
+    let current_count = state
+        .as_ref()
+        .filter(|value| value.get("sessionId").and_then(Value::as_str) == Some(&limits.session_id))
+        .and_then(|value| value.get("invocations").and_then(Value::as_u64))
+        .unwrap_or(0);
+
+    if current_count >= u64::from(limits.max_invocations) {
+        return Err(APWError::new(
+            Status::GenericError,
+            format!(
+                "External fallback provider `{}` invocation limit exceeded for this APW session (limit: {}). Reauthenticate or increase `fallbackProviderMaxInvocations`.",
+                provider.as_str(),
+                limits.max_invocations
+            ),
+        ));
+    }
+
+    let updated = json!({
+        "sessionId": limits.session_id,
+        "provider": provider.as_str(),
+        "invocations": current_count + 1,
+    });
+    fs::write(
+        &path,
+        serde_json::to_vec_pretty(&updated).map_err(|error| {
+            APWError::new(
+                Status::GenericError,
+                format!("Failed to encode fallback provider invocation state: {error}"),
+            )
+        })?,
+    )
+    .map_err(|error| {
+        APWError::new(
+            Status::InvalidConfig,
+            format!("Failed to write fallback provider invocation state: {error}"),
+        )
+    })?;
+    set_permissions(&path, NATIVE_APP_FILE_MODE)?;
+    Ok(())
+}
+
+fn run_external_provider_command(
+    provider: ExternalFallbackProvider,
+    path: &Path,
+    config: &APWConfigV1,
+    args: &[&str],
+) -> Result<ExternalProviderCommandOutput> {
+    let limits = external_provider_limits(config);
+    reserve_external_provider_invocation(provider, &limits)?;
+
+    let mut command = Command::new(path);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // SAFETY: `pre_exec` runs after fork and before exec. The closure only calls
+    // `libc::setsid()`, which is async-signal-safe and avoids orphaning provider
+    // subprocesses when a timeout kills the process group.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let mut child = command.spawn().map_err(|error| {
+        APWError::new(
+            Status::ProcessNotRunning,
+            format!(
+                "Failed to execute {} CLI at {}: {error}",
+                provider.as_str(),
+                path.display()
+            ),
+        )
+    })?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        APWError::new(
+            Status::ProcessNotRunning,
+            format!(
+                "Failed to capture {} CLI stdout at {}.",
+                provider.as_str(),
+                path.display()
+            ),
+        )
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        APWError::new(
+            Status::ProcessNotRunning,
+            format!(
+                "Failed to capture {} CLI stderr at {}.",
+                provider.as_str(),
+                path.display()
+            ),
+        )
+    })?;
+    let stdout_reader = std::thread::spawn(move || {
+        let mut output = Vec::with_capacity(MAX_BROKER_BYTES.min(8 * 1024));
+        stdout
+            .take((MAX_BROKER_BYTES + 1) as u64)
+            .read_to_end(&mut output)
+            .map(|_| output)
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut output = Vec::with_capacity(MAX_BROKER_BYTES.min(8 * 1024));
+        stderr
+            .take((MAX_BROKER_BYTES + 1) as u64)
+            .read_to_end(&mut output)
+            .map(|_| output)
+    });
+    let started = Instant::now();
+    let timeout = Duration::from_millis(limits.timeout_ms);
+
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|error| {
+            APWError::new(
+                Status::ProcessNotRunning,
+                format!(
+                    "Failed to inspect {} CLI at {}: {error}",
+                    provider.as_str(),
+                    path.display()
+                ),
+            )
+        })? {
+            break status;
+        }
+
+        if started.elapsed() >= timeout {
+            let pid = child.id() as i32;
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(APWError::new(
+                Status::CommunicationTimeout,
+                format!(
+                    "External fallback provider `{}` timed out after {}ms and was killed.",
+                    provider.as_str(),
+                    limits.timeout_ms
+                ),
+            ));
+        }
+
+        std::thread::sleep(Duration::from_millis(EXTERNAL_PROVIDER_POLL_MS));
+    };
+
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| {
+            APWError::new(
+                Status::ProtoInvalidResponse,
+                format!("Failed to read {} CLI stdout.", provider.as_str()),
+            )
+        })?
+        .map_err(|error| {
+            APWError::new(
+                Status::ProtoInvalidResponse,
+                format!("Failed to read {} CLI stdout: {error}", provider.as_str()),
+            )
+        })?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| {
+            APWError::new(
+                Status::ProtoInvalidResponse,
+                format!("Failed to read {} CLI stderr.", provider.as_str()),
+            )
+        })?
+        .map_err(|error| {
+            APWError::new(
+                Status::ProtoInvalidResponse,
+                format!("Failed to read {} CLI stderr: {error}", provider.as_str()),
+            )
+        })?;
+    if stdout.len() > MAX_BROKER_BYTES || stderr.len() > MAX_BROKER_BYTES {
+        return Err(APWError::new(
+            Status::ProtoInvalidResponse,
+            format!(
+                "{} CLI returned more than {MAX_BROKER_BYTES} bytes while looking up a credential.",
+                provider.as_str()
+            ),
+        ));
+    }
+
+    Ok(ExternalProviderCommandOutput {
+        success: status.success(),
+        stdout,
+        stderr,
+    })
+}
+
 fn external_provider_login(url: &str) -> Result<Option<Value>> {
-    let config = read_config_file_or_empty();
+    let config = match read_config_file() {
+        Ok(config) => config,
+        Err(error) if error.message.starts_with("No config file at ") => return Ok(None),
+        Err(error) => return Err(error),
+    };
     let Some(provider) = config.fallback_provider else {
         return Ok(None);
     };
@@ -711,16 +1280,7 @@ fn external_provider_login(url: &str) -> Result<Option<Value>> {
             ),
         ));
     };
-    let provider_path = PathBuf::from(provider_path);
-    if !provider_path.is_absolute() {
-        return Err(APWError::new(
-            Status::InvalidConfig,
-            format!(
-                "Fallback provider `{}` must use an absolute executable path.",
-                provider.as_str()
-            ),
-        ));
-    }
+    let provider_path = validate_external_provider_path(provider, provider_path)?;
 
     let host = url::Url::parse(url)
         .map_err(|_| APWError::new(Status::InvalidParam, "Invalid URL for external fallback."))?
@@ -730,34 +1290,28 @@ fn external_provider_login(url: &str) -> Result<Option<Value>> {
 
     let payload = match provider {
         ExternalFallbackProvider::OnePassword => {
-            load_1password_credential(&provider_path, &host, url)?
+            load_1password_credential(&provider_path, &config, &host, url)?
         }
         ExternalFallbackProvider::Bitwarden => {
-            load_bitwarden_credential(&provider_path, &host, url)?
+            load_bitwarden_credential(&provider_path, &config, &host, url)?
         }
     };
     Ok(Some(payload))
 }
 
-fn load_1password_credential(path: &Path, host: &str, raw_url: &str) -> Result<Value> {
-    let list_output = Command::new(path)
-        .arg("item")
-        .arg("list")
-        .arg("--categories")
-        .arg("LOGIN")
-        .arg("--format")
-        .arg("json")
-        .output()
-        .map_err(|error| {
-            APWError::new(
-                Status::ProcessNotRunning,
-                format!(
-                    "Failed to execute 1Password CLI at {}: {error}",
-                    path.display()
-                ),
-            )
-        })?;
-    if !list_output.status.success() {
+fn load_1password_credential(
+    path: &Path,
+    config: &APWConfigV1,
+    host: &str,
+    raw_url: &str,
+) -> Result<Value> {
+    let list_output = run_external_provider_command(
+        ExternalFallbackProvider::OnePassword,
+        path,
+        config,
+        &["item", "list", "--categories", "LOGIN", "--format", "json"],
+    )?;
+    if !list_output.success {
         return Err(APWError::new(
             Status::NoResults,
             format!(
@@ -794,23 +1348,13 @@ fn load_1password_credential(path: &Path, host: &str, raw_url: &str) -> Result<V
             )
         })?;
 
-    let output = Command::new(path)
-        .arg("item")
-        .arg("get")
-        .arg(item_id)
-        .arg("--format")
-        .arg("json")
-        .output()
-        .map_err(|error| {
-            APWError::new(
-                Status::ProcessNotRunning,
-                format!(
-                    "Failed to execute 1Password CLI at {}: {error}",
-                    path.display()
-                ),
-            )
-        })?;
-    if !output.status.success() {
+    let output = run_external_provider_command(
+        ExternalFallbackProvider::OnePassword,
+        path,
+        config,
+        &["item", "get", item_id, "--format", "json"],
+    )?;
+    if !output.success {
         return Err(APWError::new(
             Status::NoResults,
             format!(
@@ -882,23 +1426,19 @@ fn load_1password_credential(path: &Path, host: &str, raw_url: &str) -> Result<V
     ))
 }
 
-fn load_bitwarden_credential(path: &Path, host: &str, raw_url: &str) -> Result<Value> {
-    let output = Command::new(path)
-        .arg("list")
-        .arg("items")
-        .arg("--search")
-        .arg(host)
-        .output()
-        .map_err(|error| {
-            APWError::new(
-                Status::ProcessNotRunning,
-                format!(
-                    "Failed to execute Bitwarden CLI at {}: {error}",
-                    path.display()
-                ),
-            )
-        })?;
-    if !output.status.success() {
+fn load_bitwarden_credential(
+    path: &Path,
+    config: &APWConfigV1,
+    host: &str,
+    raw_url: &str,
+) -> Result<Value> {
+    let output = run_external_provider_command(
+        ExternalFallbackProvider::Bitwarden,
+        path,
+        config,
+        &["list", "items", "--search", host],
+    )?;
+    if !output.success {
         return Err(APWError::new(
             Status::NoResults,
             format!(
@@ -1036,7 +1576,10 @@ fn external_cli_payload(
         "username": username,
         "password": password,
         "transport": "external_cli",
-        "userMediated": false,
+        "userMediated": true,
+        "mediation": "explicit_cli_flag",
+        "externalFallbackExplicit": true,
+        "securityMode": "reduced_external_cli",
         "source": provider.as_str(),
     })
 }
@@ -1047,7 +1590,19 @@ mod tests {
     use crate::types::APWConfigV1;
     use serial_test::serial;
     use std::os::unix::net::UnixListener;
+    use std::path::Path;
     use tempfile::TempDir;
+
+    const TEST_EXTERNAL_FALLBACK_TIMEOUT_MS: u64 = 500;
+
+    fn bind_restrictive_socket(path: &Path) -> UnixListener {
+        let previous_umask = unsafe { libc::umask(0o177) };
+        let listener = UnixListener::bind(path);
+        unsafe {
+            libc::umask(previous_umask);
+        }
+        listener.unwrap()
+    }
 
     fn with_temp_home<F, R>(run: F) -> R
     where
@@ -1065,16 +1620,69 @@ mod tests {
         result
     }
 
+    fn with_demo_env<F, R>(value: Option<&str>, run: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        let previous_value = env::var("APW_DEMO").ok();
+        if let Some(value) = value {
+            env::set_var("APW_DEMO", value);
+        } else {
+            env::remove_var("APW_DEMO");
+        }
+        let result = run();
+        if let Some(value) = previous_value {
+            env::set_var("APW_DEMO", value);
+        } else {
+            env::remove_var("APW_DEMO");
+        }
+        result
+    }
+
     #[test]
     #[serial]
-    fn doctor_creates_default_credentials_file() {
+    fn doctor_does_not_create_default_credentials_file_without_demo_gate() {
         with_temp_home(|| {
-            let payload = native_app_doctor().unwrap();
-            assert_eq!(
-                payload["frameworks"]["authenticationServicesLinked"],
-                json!(true)
-            );
-            assert!(native_app_credentials_path().exists());
+            with_demo_env(None, || {
+                let payload = native_app_doctor().unwrap();
+                assert_eq!(
+                    payload["frameworks"]["authenticationServicesLinked"],
+                    json!(true)
+                );
+                let diagnostics = payload["ciDiagnostics"].as_array().unwrap();
+                for id in [
+                    "xcodebuild",
+                    "cargo",
+                    "detect_secrets",
+                    "developer_id_identity",
+                    "runner_labels",
+                ] {
+                    assert!(
+                        diagnostics.iter().any(|entry| entry["id"] == json!(id)),
+                        "missing diagnostic {id}: {diagnostics:#?}"
+                    );
+                }
+                assert!(diagnostics.iter().all(|entry| entry["status"]
+                    .as_str()
+                    .map(|status| ["OK", "WARN", "FAIL"].contains(&status))
+                    .unwrap_or(false)));
+                assert!(!native_app_credentials_path().exists());
+            });
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn doctor_creates_default_credentials_file_with_demo_gate() {
+        with_temp_home(|| {
+            with_demo_env(Some("1"), || {
+                let payload = native_app_doctor().unwrap();
+                assert_eq!(
+                    payload["frameworks"]["authenticationServicesLinked"],
+                    json!(true)
+                );
+                assert!(native_app_credentials_path().exists());
+            });
         });
     }
 
@@ -1193,7 +1801,7 @@ else:
             )
             .unwrap();
 
-            let payload = native_app_login("https://vault.example.com").unwrap();
+            let payload = native_app_login("https://vault.example.com", true).unwrap();
             assert_eq!(payload["source"], "1password");
             assert_eq!(payload["transport"], "external_cli");
             assert_eq!(payload["username"], "alice@example.com");
@@ -1255,11 +1863,197 @@ else:
             )
             .unwrap();
 
-            let payload = native_app_login("https://vault.example.com").unwrap();
+            let payload = native_app_login("https://vault.example.com", true).unwrap();
             assert_eq!(payload["source"], "bitwarden");
             assert_eq!(payload["transport"], "external_cli");
             assert_eq!(payload["username"], "alice@example.com");
             assert_eq!(payload["url"], "https://vault.example.com/login");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn external_1password_provider_times_out() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("op");
+            fs::write(
+                &provider_path,
+                format!(
+                    "#!/bin/sh\nsleep {}\n",
+                    (TEST_EXTERNAL_FALLBACK_TIMEOUT_MS / 1_000) + 2
+                ),
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+            let config = APWConfigV1 {
+                fallback_provider_timeout_ms: Some(TEST_EXTERNAL_FALLBACK_TIMEOUT_MS),
+                ..APWConfigV1::default()
+            };
+
+            let started = std::time::Instant::now();
+            let error = load_1password_credential(
+                &provider_path,
+                &config,
+                "vault.example.com",
+                "https://vault.example.com",
+            )
+            .unwrap_err();
+            assert_eq!(error.code, Status::CommunicationTimeout);
+            assert!(
+                started.elapsed()
+                    < Duration::from_millis(
+                        TEST_EXTERNAL_FALLBACK_TIMEOUT_MS.saturating_add(2_000)
+                    )
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn external_bitwarden_provider_times_out() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("bw");
+            fs::write(
+                &provider_path,
+                format!(
+                    "#!/bin/sh\nsleep {}\n",
+                    (TEST_EXTERNAL_FALLBACK_TIMEOUT_MS / 1_000) + 2
+                ),
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+            let config = APWConfigV1 {
+                fallback_provider_timeout_ms: Some(TEST_EXTERNAL_FALLBACK_TIMEOUT_MS),
+                ..APWConfigV1::default()
+            };
+
+            let started = std::time::Instant::now();
+            let error = load_bitwarden_credential(
+                &provider_path,
+                &config,
+                "vault.example.com",
+                "https://vault.example.com",
+            )
+            .unwrap_err();
+            assert_eq!(error.code, Status::CommunicationTimeout);
+            assert!(
+                started.elapsed()
+                    < Duration::from_millis(
+                        TEST_EXTERNAL_FALLBACK_TIMEOUT_MS.saturating_add(2_000)
+                    )
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn external_1password_provider_rejects_oversized_output() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("op");
+            fs::write(
+                &provider_path,
+                format!(
+                    "#!/usr/bin/env python3
+import sys
+sys.stdout.write('[' + ('x' * {}) + ']')
+",
+                    MAX_BROKER_BYTES + 1
+                ),
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+            let config = APWConfigV1::default();
+
+            let error = load_1password_credential(
+                &provider_path,
+                &config,
+                "vault.example.com",
+                "https://vault.example.com",
+            )
+            .unwrap_err();
+            assert_eq!(error.code, Status::ProtoInvalidResponse);
+            assert!(error.message.contains("returned more than"));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn external_bitwarden_provider_rejects_oversized_output() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("bw");
+            fs::write(
+                &provider_path,
+                format!(
+                    "#!/usr/bin/env python3
+import sys
+sys.stdout.write('[' + ('x' * {}) + ']')
+",
+                    MAX_BROKER_BYTES + 1
+                ),
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+            let config = APWConfigV1::default();
+
+            let error = load_bitwarden_credential(
+                &provider_path,
+                &config,
+                "vault.example.com",
+                "https://vault.example.com",
+            )
+            .unwrap_err();
+            assert_eq!(error.code, Status::ProtoInvalidResponse);
+            assert!(error.message.contains("returned more than"));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn login_requires_explicit_external_fallback_even_when_configured() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("bw");
+            fs::write(
+                &provider_path,
+                r#"#!/usr/bin/env python3
+import json
+print(json.dumps([{"login":{"username":"alice@example.com","password":"secret","uris":[{"uri":"https://vault.example.com"}]}}]))
+"#,
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::Bitwarden),
+                fallback_provider_path: Some(provider_path.display().to_string()),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            let error = native_app_login("https://vault.example.com", false).unwrap_err();
+            assert_eq!(error.code, Status::ProcessNotRunning);
         });
     }
 
@@ -1282,9 +2076,122 @@ else:
             )
             .unwrap();
 
-            let error = native_app_login("https://vault.example.com").unwrap_err();
+            let error = native_app_login("https://vault.example.com", true).unwrap_err();
             assert_eq!(error.code, Status::InvalidConfig);
             assert!(error.message.contains("absolute executable path"));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn external_provider_timeout_kills_provider_process() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("bw");
+            let pid_path = provider_dir.path().join("provider.pid");
+            fs::write(
+                &provider_path,
+                format!(
+                    r#"#!/usr/bin/env python3
+import os
+import pathlib
+import time
+
+pathlib.Path({pid_path:?}).write_text(str(os.getpid()), encoding="utf-8")
+time.sleep(10)
+"#,
+                    pid_path = pid_path.display().to_string()
+                ),
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::Bitwarden),
+                fallback_provider_path: Some(provider_path.display().to_string()),
+                fallback_provider_timeout_ms: Some(500),
+                fallback_provider_max_invocations: Some(5),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            let started = Instant::now();
+            let error = native_app_login("https://vault.example.com", true).unwrap_err();
+            assert_eq!(error.code, Status::CommunicationTimeout);
+            assert!(error.message.contains("timed out after 500ms"));
+            assert!(error.message.contains("was killed"));
+            assert!(started.elapsed() < Duration::from_secs(3));
+
+            let pid: i32 = fs::read_to_string(pid_path).unwrap().parse().unwrap();
+            assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn external_provider_invocation_limit_returns_clear_error() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("bw");
+            fs::write(
+                &provider_path,
+                r#"#!/usr/bin/env python3
+import json
+import sys
+
+if sys.argv[1:] == ["list", "items", "--search", "vault.example.com"]:
+    print(json.dumps([
+      {
+        "name": "Work Vault",
+        "login": {
+          "username": "alice@example.com",
+          "password": "secret-bitwarden",
+          "uris": [{"uri": "https://vault.example.com/login"}]
+        }
+      }
+    ]))
+else:
+    raise SystemExit(1)
+"#,
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::Bitwarden),
+                fallback_provider_path: Some(provider_path.display().to_string()),
+                fallback_provider_max_invocations: Some(1),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            let payload = native_app_login("https://vault.example.com", true).unwrap();
+            assert_eq!(payload["source"], "bitwarden");
+
+            let error = native_app_login("https://vault.example.com", true).unwrap_err();
+            assert_eq!(error.code, Status::GenericError);
+            assert!(error.message.contains("invocation limit exceeded"));
+            assert!(error.message.contains("fallbackProviderMaxInvocations"));
         });
     }
 
@@ -1330,7 +2237,7 @@ print(json.dumps({
             permissions.set_mode(0o755);
             fs::set_permissions(&executable, permissions).unwrap();
 
-            let payload = native_app_login("https://example.com").unwrap();
+            let payload = native_app_login("https://example.com", true).unwrap();
             assert_eq!(payload["transport"], "direct_exec");
 
             drop(listener);
@@ -1343,8 +2250,7 @@ print(json.dumps({
         with_temp_home(|| {
             ensure_runtime_dir().unwrap();
             let socket_path = native_app_socket_path();
-            let listener = UnixListener::bind(&socket_path).unwrap();
-            set_permissions(&socket_path, NATIVE_APP_FILE_MODE).unwrap();
+            let listener = bind_restrictive_socket(&socket_path);
 
             let handle = std::thread::spawn(move || {
                 if let Ok((stream, _addr)) = listener.accept() {
@@ -1356,7 +2262,7 @@ print(json.dumps({
             });
 
             let started = std::time::Instant::now();
-            let error = native_app_login("https://example.com").unwrap_err();
+            let error = native_app_login("https://example.com", true).unwrap_err();
             assert_eq!(error.code, Status::CommunicationTimeout);
             assert!(
                 started.elapsed()
@@ -1409,8 +2315,71 @@ print(json.dumps({
             permissions.set_mode(0o755);
             fs::set_permissions(&executable, permissions).unwrap();
 
-            let payload = native_app_login("https://example.com").unwrap();
+            let payload = native_app_login("https://example.com", true).unwrap();
             assert_eq!(payload["transport"], "direct_exec");
         });
+    }
+
+    #[test]
+    fn run_bounded_command_caps_stdout_above_max() {
+        // Issue #42 (also covers #39): writing more than max_bytes on stdout
+        // must surface OutputTooLarge instead of letting the buffer grow.
+        let timeout = Duration::from_secs(5);
+        let max = 1024;
+        let result = run_bounded_command(
+            "/bin/sh",
+            &["-c", "yes A | tr -d '\\n' | head -c 8192"],
+            timeout,
+            max,
+        );
+        match result {
+            Err(BoundedCommandError::OutputTooLarge) => {}
+            other => panic!("expected OutputTooLarge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_bounded_command_terminates_hung_child() {
+        // Issue #39 + #42: a child that exceeds the timeout must be killed
+        // and the helper must surface TimedOut.
+        let timeout = Duration::from_millis(300);
+        let max = 4096;
+        let started = Instant::now();
+        let result = run_bounded_command("/bin/sh", &["-c", "sleep 30"], timeout, max);
+        let elapsed = started.elapsed();
+        match result {
+            Err(BoundedCommandError::TimedOut { .. }) => {}
+            other => panic!("expected TimedOut, got {other:?}"),
+        }
+        // Helper should kill the child shortly after the configured budget;
+        // give some slack for thread scheduling but never approach 30s.
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "expected fast termination, took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn run_bounded_command_returns_status_and_output_for_quick_child() {
+        let timeout = Duration::from_secs(5);
+        let result = run_bounded_command("/bin/sh", &["-c", "printf hello"], timeout, 4096)
+            .expect("expected success");
+        assert!(result.status.success());
+        assert_eq!(result.stdout, b"hello");
+    }
+
+    #[test]
+    fn run_bounded_command_reports_spawn_error_for_missing_binary() {
+        let timeout = Duration::from_secs(5);
+        let result = run_bounded_command(
+            "/this/definitely/does/not/exist/apw-test",
+            &[],
+            timeout,
+            4096,
+        );
+        match result {
+            Err(BoundedCommandError::Spawn(_)) => {}
+            other => panic!("expected Spawn error, got {other:?}"),
+        }
     }
 }
