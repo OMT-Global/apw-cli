@@ -1842,8 +1842,10 @@ fn pass_line_is_tree_entry(line: &str) -> bool {
 
 fn pass_line_depth(line: &str) -> usize {
     // Count the prefix characters that belong to the indentation/tree-art
-    // and convert to depth. Each level renders as 4 columns wide.
-    let mut prefix_chars = 0;
+    // and convert to zero-based depth. Each rendered row includes its own
+    // branch marker (`└── ` or `├── `), so subtract that marker level after
+    // counting 4-column groups.
+    let mut prefix_chars: usize = 0;
     for ch in line.chars() {
         if matches!(ch, ' ' | '│' | '├' | '└' | '─' | '\t') {
             prefix_chars += 1;
@@ -1851,7 +1853,7 @@ fn pass_line_depth(line: &str) -> usize {
             break;
         }
     }
-    prefix_chars / 4
+    (prefix_chars / 4).saturating_sub(1)
 }
 
 fn pass_strip_tree_prefix(line: &str) -> &str {
@@ -2676,6 +2678,20 @@ print(json.dumps({
                        └── notes/example.com-secret-archive\n";
         let picked = pass_pick_entry(listing, "example.com");
         assert_eq!(picked.as_deref(), Some("web/example.com/alice"));
+    }
+
+    #[test]
+    fn pass_pick_entry_resets_stack_between_top_level_roots() {
+        let listing = [
+            "Search Terms: example.com",
+            "├── old-root",
+            "│   └── old.example.com",
+            "└── web",
+            "    └── example.com",
+        ]
+        .join("\n");
+        let picked = pass_pick_entry(&listing, "example.com");
+        assert_eq!(picked.as_deref(), Some("web/example.com"));
     }
 
     #[test]
