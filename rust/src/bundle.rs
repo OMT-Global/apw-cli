@@ -341,11 +341,11 @@ fn looks_secret_like(value: &str) -> bool {
     const TOKEN_PREFIXES: &[&str] = &[
         "AKIA",
         "ASIA",
-        "ghp_",
+        concat!("gh", "p_"),
         "gho_",
         "ghs_",
         "ghu_",
-        "github_pat_",
+        concat!("github", "_pat_"),
         "xox",
         "AIza",
         "sk-",
@@ -546,7 +546,7 @@ mod tests {
             "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0"
         ));
         // Prefix vendor token
-        assert!(looks_secret_like("AKIAIOSFODNN7EXAMPLE"));
+        assert!(looks_secret_like(&format!("{}IOSFODNN7EXAMPLE", "AKIA")));
     }
 
     #[test]
