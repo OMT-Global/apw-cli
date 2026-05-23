@@ -25,6 +25,9 @@ const NATIVE_APP_FILE_MODE: u32 = 0o600;
 const MAX_BROKER_BYTES: usize = MAX_MESSAGE_BYTES;
 const MAX_BROKER_LOG_BYTES: u64 = 10 * 1024 * 1024;
 const NATIVE_APP_SOCKET_TIMEOUT_MS: u64 = 3_000;
+const NATIVE_APP_DIRECT_EXEC_TIMEOUT_MS: u64 = 5_000;
+const DOCTOR_PROBE_TIMEOUT_MS: u64 = 3_000;
+const BOUNDED_COMMAND_POLL_MS: u64 = 20;
 const EXTERNAL_PROVIDER_DEFAULT_TIMEOUT_MS: u64 = 5_000;
 const EXTERNAL_PROVIDER_DEFAULT_MAX_INVOCATIONS: u32 = 10;
 const EXTERNAL_PROVIDER_POLL_MS: u64 = 20;
@@ -239,12 +242,154 @@ fn load_status_file() -> Option<Value> {
     serde_json::from_str(&fs::read_to_string(native_app_status_path()).ok()?).ok()
 }
 
-fn command_output(command: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
-    Command::new(command).args(args).output()
+/// Outcome of running a bounded child command. The buffers are capped so a
+/// runaway external tool cannot exhaust CLI memory before we react to it.
+#[derive(Debug)]
+struct BoundedCommandOutput {
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+/// Error returned when a child process is bounded by either a wall-clock
+/// timeout or a per-stream byte cap. Both shapes give doctor diagnostics
+/// (#39) and the direct-exec fallback (#42) a clear structured failure to
+/// report instead of hanging or buffering unbounded output.
+#[derive(Debug)]
+enum BoundedCommandError {
+    Spawn(std::io::Error),
+    Io(std::io::Error),
+    TimedOut { elapsed_ms: u128 },
+    OutputTooLarge,
+}
+
+impl BoundedCommandError {
+    fn message(&self, command: &str) -> String {
+        match self {
+            Self::Spawn(error) => format!("Failed to launch {command}: {error}"),
+            Self::Io(error) => format!("Failed to read output from {command}: {error}"),
+            Self::TimedOut { elapsed_ms } => {
+                format!("{command} did not finish within {elapsed_ms}ms and was terminated.")
+            }
+            Self::OutputTooLarge => {
+                format!("{command} produced more output than the configured cap allows.")
+            }
+        }
+    }
+}
+
+/// Run `command args` and return its bounded stdout/stderr, terminating the
+/// child if it runs longer than `timeout` or emits more than `max_bytes` on
+/// either stream. Replaces a previous `Command::output()` call that allowed
+/// a hung or chatty external tool to block the caller or buffer unbounded
+/// output. See issues #39 (doctor CI diagnostics) and #42 (direct-exec
+/// fallback).
+fn run_bounded_command(
+    command: &str,
+    args: &[&str],
+    timeout: Duration,
+    max_bytes: usize,
+) -> std::result::Result<BoundedCommandOutput, BoundedCommandError> {
+    let mut command_builder = Command::new(command);
+    command_builder
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // SAFETY: `pre_exec` runs after fork and before exec. The closure only
+    // calls `libc::setsid()`, which is async-signal-safe. Putting the child
+    // in its own process group lets us deliver SIGKILL to any orphaned
+    // grandchildren on timeout instead of leaking pipes when the immediate
+    // child is a shell that has forked a long-running tool.
+    unsafe {
+        command_builder.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let mut child = command_builder
+        .spawn()
+        .map_err(BoundedCommandError::Spawn)?;
+    let pid = child.id() as i32;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| BoundedCommandError::Io(std::io::Error::other("missing stdout pipe")))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| BoundedCommandError::Io(std::io::Error::other("missing stderr pipe")))?;
+
+    let stdout_cap = max_bytes;
+    let stderr_cap = max_bytes;
+    let stdout_reader = std::thread::spawn(move || {
+        let mut buffer = Vec::with_capacity(stdout_cap.min(8 * 1024));
+        stdout
+            .take((stdout_cap + 1) as u64)
+            .read_to_end(&mut buffer)
+            .map(|_| buffer)
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut buffer = Vec::with_capacity(stderr_cap.min(8 * 1024));
+        stderr
+            .take((stderr_cap + 1) as u64)
+            .read_to_end(&mut buffer)
+            .map(|_| buffer)
+    });
+
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if started.elapsed() >= timeout {
+                    // Kill the entire process group so an orphaned tool that
+                    // inherited our stdout pipe (e.g. `sh -c 'sleep 30'`) is
+                    // also reaped and the reader threads can drain.
+                    unsafe {
+                        libc::kill(-pid, libc::SIGKILL);
+                    }
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stdout_reader.join();
+                    let _ = stderr_reader.join();
+                    return Err(BoundedCommandError::TimedOut {
+                        elapsed_ms: started.elapsed().as_millis(),
+                    });
+                }
+                std::thread::sleep(Duration::from_millis(BOUNDED_COMMAND_POLL_MS));
+            }
+            Err(error) => return Err(BoundedCommandError::Io(error)),
+        }
+    };
+
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| BoundedCommandError::Io(std::io::Error::other("stdout reader panicked")))?
+        .map_err(BoundedCommandError::Io)?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| BoundedCommandError::Io(std::io::Error::other("stderr reader panicked")))?
+        .map_err(BoundedCommandError::Io)?;
+
+    if stdout.len() > max_bytes || stderr.len() > max_bytes {
+        return Err(BoundedCommandError::OutputTooLarge);
+    }
+
+    Ok(BoundedCommandOutput {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 fn command_version_check(id: &str, command: &str, args: &[&str], hint: &str) -> Value {
-    match command_output(command, args) {
+    let timeout = Duration::from_millis(DOCTOR_PROBE_TIMEOUT_MS);
+    match run_bounded_command(command, args, timeout, MAX_BROKER_BYTES) {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -263,12 +408,21 @@ fn command_version_check(id: &str, command: &str, args: &[&str], hint: &str) -> 
             format!("{command} exited with status {}", output.status),
             hint,
         ),
-        Err(_) => diagnostic("FAIL", id, format!("{command} was not found"), hint),
+        Err(BoundedCommandError::Spawn(_)) => {
+            diagnostic("FAIL", id, format!("{command} was not found"), hint)
+        }
+        Err(error) => diagnostic("FAIL", id, error.message(command), hint),
     }
 }
 
 fn code_signing_identity_check() -> Value {
-    match command_output("security", &["find-identity", "-v", "-p", "codesigning"]) {
+    let timeout = Duration::from_millis(DOCTOR_PROBE_TIMEOUT_MS);
+    match run_bounded_command(
+        "security",
+        &["find-identity", "-v", "-p", "codesigning"],
+        timeout,
+        MAX_BROKER_BYTES,
+    ) {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if stdout.contains("Developer ID Application") {
@@ -296,11 +450,17 @@ fn code_signing_identity_check() -> Value {
             ),
             "Run `security find-identity -v -p codesigning` on the release runner.",
         ),
-        Err(_) => diagnostic(
+        Err(BoundedCommandError::Spawn(_)) => diagnostic(
             "WARN",
             "developer_id_identity",
             "security CLI was not found",
             "Run release signing diagnostics on macOS with Xcode command line tools installed.",
+        ),
+        Err(error) => diagnostic(
+            "WARN",
+            "developer_id_identity",
+            error.message("security find-identity"),
+            "Run `security find-identity -v -p codesigning` on the release runner.",
         ),
     }
 }
@@ -611,23 +771,34 @@ fn send_request_via_executable(command: &str, payload: Value) -> Result<Value> {
             format!("Failed to encode native app fallback request: {error}"),
         )
     })?;
-    let output = Command::new(&executable)
-        .arg("request")
-        .arg(command)
-        .arg(payload_arg)
-        .output()
-        .map_err(|error| {
-            APWError::new(
-                Status::ProcessNotRunning,
-                format!("Failed to execute the APW app directly: {error}"),
-            )
-        })?;
-    if output.stdout.len() > MAX_BROKER_BYTES {
-        return Err(APWError::new(
+    let executable_str = executable.to_string_lossy().into_owned();
+    let timeout = Duration::from_millis(NATIVE_APP_DIRECT_EXEC_TIMEOUT_MS);
+    let output = run_bounded_command(
+        &executable_str,
+        &["request", command, &payload_arg],
+        timeout,
+        MAX_BROKER_BYTES,
+    )
+    .map_err(|error| match error {
+        BoundedCommandError::Spawn(error) => APWError::new(
+            Status::ProcessNotRunning,
+            format!("Failed to execute the APW app directly: {error}"),
+        ),
+        BoundedCommandError::Io(error) => APWError::new(
+            Status::CommunicationTimeout,
+            format!("Failed to read direct response from the APW app: {error}"),
+        ),
+        BoundedCommandError::TimedOut { elapsed_ms } => APWError::new(
+            Status::CommunicationTimeout,
+            format!(
+                "APW app direct execution did not respond within {elapsed_ms}ms and was terminated."
+            ),
+        ),
+        BoundedCommandError::OutputTooLarge => APWError::new(
             Status::ProtoInvalidResponse,
             "Native app direct response payload too large.",
-        ));
-    }
+        ),
+    })?;
     let value: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
         APWError::new(
             Status::ProtoInvalidResponse,
@@ -2771,5 +2942,68 @@ else:
                 err.message
             );
         });
+    }
+
+    #[test]
+    fn run_bounded_command_caps_stdout_above_max() {
+        // Issue #42 (also covers #39): writing more than max_bytes on stdout
+        // must surface OutputTooLarge instead of letting the buffer grow.
+        let timeout = Duration::from_secs(5);
+        let max = 1024;
+        let result = run_bounded_command(
+            "/bin/sh",
+            &["-c", "yes A | tr -d '\\n' | head -c 8192"],
+            timeout,
+            max,
+        );
+        match result {
+            Err(BoundedCommandError::OutputTooLarge) => {}
+            other => panic!("expected OutputTooLarge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_bounded_command_terminates_hung_child() {
+        // Issue #39 + #42: a child that exceeds the timeout must be killed
+        // and the helper must surface TimedOut.
+        let timeout = Duration::from_millis(300);
+        let max = 4096;
+        let started = Instant::now();
+        let result = run_bounded_command("/bin/sh", &["-c", "sleep 30"], timeout, max);
+        let elapsed = started.elapsed();
+        match result {
+            Err(BoundedCommandError::TimedOut { .. }) => {}
+            other => panic!("expected TimedOut, got {other:?}"),
+        }
+        // Helper should kill the child shortly after the configured budget;
+        // give some slack for thread scheduling but never approach 30s.
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "expected fast termination, took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn run_bounded_command_returns_status_and_output_for_quick_child() {
+        let timeout = Duration::from_secs(5);
+        let result = run_bounded_command("/bin/sh", &["-c", "printf hello"], timeout, 4096)
+            .expect("expected success");
+        assert!(result.status.success());
+        assert_eq!(result.stdout, b"hello");
+    }
+
+    #[test]
+    fn run_bounded_command_reports_spawn_error_for_missing_binary() {
+        let timeout = Duration::from_secs(5);
+        let result = run_bounded_command(
+            "/this/definitely/does/not/exist/apw-test",
+            &[],
+            timeout,
+            4096,
+        );
+        match result {
+            Err(BoundedCommandError::Spawn(_)) => {}
+            other => panic!("expected Spawn error, got {other:?}"),
+        }
     }
 }
