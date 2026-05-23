@@ -21,4 +21,15 @@ class Apw < Formula
     assert_match version.to_s, shell_output("#{bin}/apw --version")
     assert_match "\"app\"", shell_output("#{bin}/apw status --json 2>&1")
   end
+
+  def caveats
+    <<~EOS
+      APW uses a formula-plus-app-install model for v2.
+      The formula installs the `apw` CLI and stages APW.app under Homebrew libexec.
+
+      Finish per-user app setup with:
+        apw app install
+        apw app launch
+    EOS
+  end
 end
