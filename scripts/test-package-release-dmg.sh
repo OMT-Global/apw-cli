@@ -83,3 +83,11 @@ test -f "$DMG_PATH"
 test -f "$CHECKSUM_PATH"
 grep -q "create" "$fake_log"
 grep -Eq "^[0-9a-f]{64}  apw-macos-v9.9.9.dmg$" "$CHECKSUM_PATH"
+
+awk '
+  /^## Install from a release DMG/ { inside = 1 }
+  /^## Homebrew/ { inside = 0 }
+  inside && /apw app install/ && !install_line { install_line = NR }
+  inside && /hdiutil detach/ { detach_line = NR }
+  END { exit !(install_line && detach_line && install_line < detach_line) }
+' "$ROOT_DIR/docs/INSTALLATION.md"
