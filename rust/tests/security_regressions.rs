@@ -238,44 +238,17 @@ fn doctor_ci_reports_unreachable_supported_domain_from_config() {
 
 #[test]
 #[serial]
-fn command_invalid_pin_is_rejected_without_network() {
+fn login_invalid_url_rejected_before_broker_dependency() {
     with_temp_home(|home| {
-        let (status, stdout, stderr) = run_command(home, &["--json", "auth", "--pin", "12ab"]);
+        let (status, stdout, stderr) = run_command(home, &["--json", "login", "ftp://example.com"]);
         assert_eq!(
             status, 2,
             "status={status}, stdout={stdout}, stderr={stderr}"
         );
         let output = parse_json_output(&stderr);
         assert_eq!(output["code"], 2);
-        assert!(output["error"]
-            .as_str()
-            .unwrap_or("")
-            .contains("PIN must be exactly 6 digits."));
-    });
-}
-
-#[test]
-#[serial]
-fn command_invalid_url_rejected_before_auth_dependency() {
-    with_temp_home(|home| {
-        let (status, stdout, stderr) = run_command(home, &["--json", "pw", "list", "bad host"]);
-        assert_eq!(
-            status, 1,
-            "status={status}, stdout={stdout}, stderr={stderr}"
-        );
-        let output = parse_json_output(&stderr);
-        assert_eq!(output["code"], 1);
         assert_eq!(output["ok"], false);
-        assert!(
-            output["error"]
-                .as_str()
-                .unwrap_or("")
-                .contains("Invalid URL")
-                || output["error"]
-                    .as_str()
-                    .unwrap_or("")
-                    .contains("Invalid URL host.")
-        );
+        assert!(output["error"].as_str().unwrap_or("").contains("https URL"));
     });
 }
 
@@ -453,25 +426,6 @@ fn status_binary_with_nonexistent_home_directory_isolated() {
 
 #[test]
 #[serial]
-fn pw_list_reports_failed_launch_state_before_invalid_session() {
-    with_temp_home(|home| {
-        write_launch_failure_config(home, "helper test failure");
-        let (status, stdout, stderr) = run_command(home, &["--json", "pw", "list", "example.com"]);
-        assert_eq!(
-            status, 103,
-            "status={status}, stdout={stdout}, stderr={stderr}"
-        );
-        let output = parse_json_output(&stderr);
-        assert_eq!(output["code"], 103);
-        assert_eq!(output["ok"], false);
-        let error = output["error"].as_str().unwrap_or_default();
-        assert!(error.contains("helper test failure"));
-        assert!(error.contains("daemon.preflight.status="));
-    });
-}
-
-#[test]
-#[serial]
 fn status_json_preserves_failed_launch_metadata_after_command_failure() {
     with_temp_home(|home| {
         write_launch_failure_config(
@@ -489,11 +443,11 @@ fn status_json_preserves_failed_launch_metadata_after_command_failure() {
         assert_eq!(initial["payload"]["daemon"]["lastLaunchStatus"], "failed");
         assert_eq!(initial["payload"]["daemon"]["lastLaunchStrategy"], "direct");
 
-        let (pw_status, pw_stdout, pw_stderr) =
-            run_command(home, &["--json", "pw", "list", "example.com"]);
+        let (login_status, login_stdout, login_stderr) =
+            run_command(home, &["--json", "login", "ftp://example.com"]);
         assert_eq!(
-            pw_status, 103,
-            "status={pw_status}, stdout={pw_stdout}, stderr={pw_stderr}"
+            login_status, 2,
+            "status={login_status}, stdout={login_stdout}, stderr={login_stderr}"
         );
 
         let (status_after, stdout_after, stderr_after) = run_command(home, &["status", "--json"]);

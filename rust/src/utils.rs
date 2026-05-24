@@ -176,7 +176,7 @@ fn read_config_file_or_null() -> Result<APWConfigV1> {
     let legacy = serde_json::from_value::<APWConfig>(parsed).map_err(|_| {
         APWError::new(
             crate::types::Status::InvalidConfig,
-            "Invalid config format. Run `apw auth` again.",
+            "Invalid config format. Run `apw doctor` and use `apw login <url>` through the native app broker.",
         )
     })?;
 
@@ -439,7 +439,7 @@ pub fn read_config(opts: Option<ConfigReadOptions>) -> Result<APWRuntimeConfig> 
         if options.require_auth {
             return Err(APWError::new(
                 crate::types::Status::InvalidSession,
-                "Session expired. Run `apw auth` again.",
+                "Session expired. Use `apw app launch` and `apw login <url>` through the native app broker.",
             ));
         }
         return Ok(APWRuntimeConfig {
@@ -506,7 +506,7 @@ pub fn read_config(opts: Option<ConfigReadOptions>) -> Result<APWRuntimeConfig> 
         clear_config();
         return Err(APWError::new(
             crate::types::Status::InvalidSession,
-            "No active session. Run `apw auth` again.",
+            "No active session. Use `apw app launch` and `apw login <url>` through the native app broker.",
         ));
     }
 
@@ -584,7 +584,7 @@ pub fn write_config(input: WriteConfigInput) -> Result<APWConfigV1> {
     if !input.allow_empty && username.is_empty() {
         return Err(APWError::new(
             crate::types::Status::InvalidConfig,
-            "Cannot persist incomplete config. Run `apw auth` again.",
+            "Cannot persist incomplete config. Use `apw app launch` and `apw login <url>` through the native app broker.",
         ));
     }
 
@@ -646,7 +646,7 @@ pub fn write_config(input: WriteConfigInput) -> Result<APWConfigV1> {
         if username.is_empty() || (secret_source == SecretSource::File && shared_key.is_empty()) {
             return Err(APWError::new(
                 crate::types::Status::InvalidConfig,
-                "Cannot persist incomplete config. Run `apw auth` again.",
+                "Cannot persist incomplete config. Use `apw app launch` and `apw login <url>` through the native app broker.",
             ));
         }
         if secret_source == SecretSource::Keychain && !supports_keychain() {

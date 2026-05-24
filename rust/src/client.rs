@@ -38,7 +38,7 @@ const LAUNCH_STATUS_FAILED: &str = "failed";
 const LAUNCH_STATUS_DISABLED: &str = "disabled";
 const LAUNCH_NOT_RUNNING_MESSAGE: &str = "Helper process is not running.";
 const UNAUTHENTICATED_DAEMON_MESSAGE: &str =
-    "Daemon is running but not authenticated. Run `apw auth`.";
+    "Daemon is running but not authenticated. Use `apw app launch` and `apw login <url>`.";
 
 #[derive(Clone, Copy)]
 pub struct ClientSendOpts {
@@ -780,7 +780,7 @@ impl ApplePasswordManager {
             {
                 UNAUTHENTICATED_DAEMON_MESSAGE
             } else {
-                "No active session. Start the daemon with `apw start`, then run `apw auth`."
+                "No active session. Use `apw app launch` and `apw login <url>` through the native app broker."
             },
         ))
     }

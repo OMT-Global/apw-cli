@@ -147,14 +147,9 @@ apw login https://example.com
 Machine-readable build metadata is available via `apw version` and
 `apw version --json`.
 
-Legacy migration commands remain available in the repo:
-
-```bash
-apw start
-apw auth
-apw pw
-apw host doctor --json
-```
+Legacy daemon commands (`apw start`, `apw auth`, `apw pw`, and `apw otp`) have
+been removed from the active CLI contract. Use `apw app launch`,
+`apw login <url>`, `apw fill <url>`, and `apw doctor` for supported v2 flows.
 
 `apw otp` has no v2 replacement and is removed from the Rust CLI. See
 [`docs/MIGRATION_AND_PARITY.md`](docs/MIGRATION_AND_PARITY.md) for the
@@ -174,7 +169,7 @@ Security and release validation guidance:
 
 ## Repository layout
 
-- [`rust/`](rust/): supported CLI, legacy daemon, migration scaffolding, and packaging target
+- [`rust/`](rust/): supported CLI, app-broker migration scaffolding, and packaging target
 - `native-app/`: v2 bootstrap macOS app bundle and local broker service
 - `native-host/`: legacy macOS companion host from the parity line
 - [`browser-bridge/`](browser-bridge/): legacy bridge retained only during migration

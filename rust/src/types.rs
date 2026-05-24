@@ -690,7 +690,7 @@ pub fn status_text(status: Status) -> &'static str {
         Status::InvalidMessageFormat => "Invalid message format",
         Status::DuplicateItem => "Duplicate item found",
         Status::UnknownAction => "Unknown action requested",
-        Status::InvalidSession => "Invalid session, reauthenticate with `apw auth`",
+        Status::InvalidSession => "Invalid session, use `apw app launch` and `apw login <url>`",
         Status::ServerError => "Server error",
         Status::CommunicationTimeout => "Communication timeout",
         Status::InvalidConfig => "Stored configuration is invalid",
@@ -725,7 +725,7 @@ mod tests {
         assert_eq!(status_text(Status::Success), "Operation successful");
         assert_eq!(
             status_text(Status::InvalidSession),
-            "Invalid session, reauthenticate with `apw auth`"
+            "Invalid session, use `apw app launch` and `apw login <url>`"
         );
         assert_eq!(
             status_text(Status::GenericError),
