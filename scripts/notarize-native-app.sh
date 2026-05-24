@@ -7,15 +7,18 @@ CLI_BIN="${APW_CLI_BINARY_PATH:-$ROOT_DIR/rust/target/release/apw}"
 REQUIRED="${APW_NOTARIZE_REQUIRED:-0}"
 DRY_RUN="${APW_NOTARIZE_DRY_RUN:-0}"
 
-# The notarization flow uses App Store Connect API key credentials for
-# `notarytool`; the Developer ID certificate is only for codesigning.
-required_env=(
+codesigning_env=(
   APPLE_DEVELOPER_CERT_P12
   APPLE_CERT_PASSWORD
+)
+
+notarytool_env=(
   APPLE_NOTARY_KEY_ID
   APPLE_NOTARY_KEY_ISSUER
   APPLE_NOTARY_PRIVATE_KEY
 )
+
+required_env=("${codesigning_env[@]}" "${notarytool_env[@]}")
 
 missing=()
 for name in "${required_env[@]}"; do
