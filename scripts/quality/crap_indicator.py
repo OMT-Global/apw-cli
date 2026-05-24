@@ -103,9 +103,13 @@ def parse_functions(path: Path, coverage: dict[Path, dict[int, int]]) -> list[Fu
         body_lines: list[str] = []
         depth = 0
         seen_body = False
+        is_declaration = False
         while index < len(lines):
             line = lines[index]
             body_lines.append(line)
+            if not seen_body and "{" not in line and ";" in line:
+                is_declaration = True
+                break
             depth += line.count("{")
             if "{" in line:
                 seen_body = True
@@ -114,6 +118,9 @@ def parse_functions(path: Path, coverage: dict[Path, dict[int, int]]) -> list[Fu
                 break
             index += 1
         end_index = index
+        if is_declaration or not seen_body:
+            index += 1
+            continue
         metrics.append(
             FunctionMetric(
                 path=path,
@@ -167,6 +174,15 @@ def self_test() -> None:
                     "pub extern \"C\" fn ffi_helper(value: bool) {",
                     "    if value { println!(\"ffi\"); }",
                     "}",
+                    "trait Strategy {",
+                    "    fn strategy(&self) -> &'static str;",
+                    "    fn multiline(",
+                    "        &self,",
+                    "    ) -> bool;",
+                    "}",
+                    "fn after_trait() {",
+                    "    println!(\"after\");",
+                    "}",
                     "fn branchy(value: bool) {",
                     "    if value && true {",
                     "        match value { true => (), false => () }",
@@ -207,6 +223,9 @@ def self_test() -> None:
         metrics = run([source], lcov, 10)
         names = {metric.name for metric in metrics}
         assert {"const_helper", "unsafe_helper", "ffi_helper"}.issubset(names)
+        assert "strategy" not in names
+        assert "multiline" not in names
+        assert "after_trait" in names
         assert metrics[0].name == "branchy"
         simple = next(metric for metric in metrics if metric.name == "simple")
         assert metrics[0].complexity > simple.complexity
