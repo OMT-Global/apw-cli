@@ -218,18 +218,6 @@ fn ask_pw_action() -> Result<PwAction, APWError> {
     }
 }
 
-fn ask_otp_action() -> Result<OtpAction, APWError> {
-    let selected = read_prompt("Choose action:\n  1) list OTPs\n  2) get OTP\n> ")?;
-    let lowered = selected.trim().to_lowercase();
-    if lowered == "1" || lowered == "list" || lowered == "list otps" {
-        Ok(OtpAction::List { url: String::new() })
-    } else if lowered == "2" || lowered == "get" || lowered == "get otp" {
-        Ok(OtpAction::Get { url: String::new() })
-    } else {
-        Err(APWError::new(Status::InvalidParam, "Invalid action."))
-    }
-}
-
 #[derive(Parser)]
 #[command(name = "apw")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
@@ -262,10 +250,6 @@ pub enum Commands {
         long_about = "This command uses the legacy daemon path and will be removed in v2.1.0. Use `apw login <url>` through the native app broker instead; see docs/MIGRATION_AND_PARITY.md."
     )]
     Pw(PwCommand),
-    #[command(
-        long_about = "This command uses the legacy daemon path and will be removed in v2.1.0. OTP parity is retained only for migration; see docs/MIGRATION_AND_PARITY.md."
-    )]
-    Otp(OtpCommand),
     #[command(
         long_about = "This command starts the legacy daemon path and will be removed in v2.1.0. Use `apw app launch` for the native app broker instead; see docs/MIGRATION_AND_PARITY.md."
     )]
@@ -384,21 +368,6 @@ pub enum PwAction {
 
 #[derive(Args)]
 #[command(
-    long_about = "DEPRECATED: `apw otp` is part of the legacy daemon path and will be removed in v2.1.0. See docs/MIGRATION_AND_PARITY.md."
-)]
-pub struct OtpCommand {
-    #[command(subcommand)]
-    pub action: Option<OtpAction>,
-}
-
-#[derive(Subcommand)]
-pub enum OtpAction {
-    Get { url: String },
-    List { url: String },
-}
-
-#[derive(Args)]
-#[command(
     long_about = "DEPRECATED: `apw start` launches the legacy WebSocket daemon and will be removed in v2.1.0. The v2 broker runs as a per-user app under `apw app launch`. See docs/MIGRATION_AND_PARITY.md."
 )]
 pub struct StartCommand {
@@ -435,7 +404,6 @@ pub async fn run(mut manager: ApplePasswordManager, cli: Cli) -> Result<(), APWE
         Commands::Host(args) => run_host(args, cli.json),
         Commands::Login(args) => run_login(args, cli.json),
         Commands::Pw(args) => run_pw(&mut manager, args, cli.json),
-        Commands::Otp(args) => run_otp(&mut manager, args, cli.json),
         Commands::Start(args) => run_start(args).await,
         Commands::Status(args) => run_status(&mut manager, args, cli.json),
         Commands::Version(args) => run_version(args, cli.json),
@@ -621,38 +589,6 @@ fn run_pw(
                 }
                 PwAction::List { .. } => {
                     let payload = manager.get_login_names_for_url(&url)?;
-                    print_entries(&payload, cli_json)
-                }
-            }
-        }
-    }
-}
-
-fn run_otp(
-    manager: &mut ApplePasswordManager,
-    args: OtpCommand,
-    cli_json: bool,
-) -> Result<(), APWError> {
-    warn_legacy_daemon_path("otp");
-    match args.action {
-        Some(OtpAction::Get { url }) => {
-            let payload = manager.get_otp_for_url(&sanitize_url(&url)?)?;
-            print_entries(&payload, cli_json)
-        }
-        Some(OtpAction::List { url }) => {
-            let payload = manager.list_otp_for_url(&sanitize_url(&url)?)?;
-            print_entries(&payload, cli_json)
-        }
-        None => {
-            let action = ask_otp_action()?;
-            let url = sanitize_url(&read_prompt("Enter URL: ")?)?;
-            match action {
-                OtpAction::Get { .. } => {
-                    let payload = manager.get_otp_for_url(&url)?;
-                    print_entries(&payload, cli_json)
-                }
-                OtpAction::List { .. } => {
-                    let payload = manager.list_otp_for_url(&url)?;
                     print_entries(&payload, cli_json)
                 }
             }
@@ -848,7 +784,7 @@ mod tests {
     #[test]
     fn legacy_daemon_help_mentions_deprecation() {
         let mut command = Cli::command();
-        for name in ["auth", "pw", "otp", "start"] {
+        for name in ["auth", "pw", "start"] {
             let help = command
                 .find_subcommand_mut(name)
                 .expect("legacy subcommand")
@@ -857,6 +793,15 @@ mod tests {
             assert!(help.contains("legacy daemon path"), "{name} help: {help}");
             assert!(help.contains("v2.1.0"), "{name} help: {help}");
         }
+    }
+
+    #[test]
+    fn otp_subcommand_is_removed() {
+        let Err(error) = Cli::try_parse_from(["apw", "otp", "list", "example.com"]) else {
+            panic!("expected removed otp subcommand to be rejected");
+        };
+        let rendered = error.to_string();
+        assert!(rendered.contains("unrecognized subcommand 'otp'"));
     }
 
     #[test]
