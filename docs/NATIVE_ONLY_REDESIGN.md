@@ -215,14 +215,20 @@ Deliverables:
   main thread and bridges results back to the worker thread via
   `DispatchSemaphore`, and a stable `BrokerErrorCode` mapping
   (`canceled` / `failed` / `invalidResponse` / `notHandled` / `unknown`).
+  SDK-specific and future `ASAuthorizationError` cases are intentionally
+  collapsed into `unknown` unless APW promotes them into a stable wire
+  code.
 - `BrokerCore` routes both `login` and `fill` through the injected broker
   when `APW_DEMO` is unset, mapping outcomes onto the existing wire
   envelope (`transport: "authentication_services"`, `userMediated: true`,
   request `intent`, and integer status codes that match the Rust `Status`
   enum).
 - `BrokerCoreTests` exercises the broker outcome paths via
-  `StubCredentialBroker` for `success` / `denied` / `canceled` /
-  `invalidResponse`, and asserts the broker error code mapping.
+  `StubCredentialBroker` / `RecordingCredentialBroker` for `login` and
+  `fill` success, denial, cancellation, `notHandled`, `invalidResponse`,
+  the non-demo no-credential-source path, and the rule that
+  `credentials.json` is not read outside `APW_DEMO=1`. The tests also
+  assert the broker error code mapping.
 
 **Phase 3 exit blockers still open**:
 

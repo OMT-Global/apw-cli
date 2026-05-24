@@ -150,6 +150,7 @@ Healthy v2 bootstrap state usually looks like:
 
 ```bash
 apw login https://example.com
+apw fill https://example.com
 ```
 
 ### External password manager fallback

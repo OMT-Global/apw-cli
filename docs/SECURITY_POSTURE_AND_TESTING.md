@@ -39,6 +39,10 @@ Release reference version: `v2.0.0`
 - native app UNIX-socket requests use a `3s` read/write timeout
 - a hung broker socket returns a non-zero `CommunicationTimeout` error instead
   of blocking the CLI indefinitely
+- AuthenticationServices returns stable APW broker codes for cancellation,
+  generic failure, invalid response, not-handled, and unknown errors;
+  SDK-specific cases are collapsed into `unknown` until APW explicitly
+  promotes them into the wire contract
 - direct executable fallback runs the APW app bundle under a `5s` wall-clock
   timeout, reads at most the configured maximum response size from each of
   stdout and stderr via bounded pipe reads, and terminates the child (process
@@ -95,6 +99,9 @@ The native app Swift test suite covers:
 - localized approval prompt copy for APW-owned UI
 - accessibility labels for the credential approval window and buttons
 - broker envelope parsing, permission checks, denial handling, and typed AuthenticationServices fallback errors
+- AuthenticationServices broker routing for `login` and `fill` success and
+  failure cases via injected test brokers, including the guarantee that
+  `credentials.json` is not consulted unless `APW_DEMO=1`
 
 ## Accessibility and localization audit
 
