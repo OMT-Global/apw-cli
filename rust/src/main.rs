@@ -1,5 +1,6 @@
 use clap::Parser;
 
+mod bundle;
 mod cli;
 // Retained legacy modules still power status/parity diagnostics until #47
 // archives the browser-helper and native-host runtime internals.
