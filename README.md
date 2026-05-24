@@ -154,9 +154,12 @@ Legacy migration commands remain available in the repo:
 apw start
 apw auth
 apw pw
-apw otp
 apw host doctor --json
 ```
+
+`apw otp` has no v2 replacement and is removed from the Rust CLI. See
+[`docs/MIGRATION_AND_PARITY.md`](docs/MIGRATION_AND_PARITY.md) for the
+AuthenticationServices rationale and migration notes.
 
 ## Security and storage
 
