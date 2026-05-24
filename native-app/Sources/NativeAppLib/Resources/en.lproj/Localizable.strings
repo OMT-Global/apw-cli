@@ -1,0 +1,7 @@
+"approval.messageText" = "Allow APW login?";
+"approval.informativeText" = "Return the bootstrap credential for %@ as %@?";
+"approval.allowButton" = "Allow";
+"approval.denyButton" = "Deny";
+"approval.accessibility.window" = "APW credential approval";
+"approval.accessibility.allow" = "Allow APW to return the selected credential";
+"approval.accessibility.deny" = "Deny the APW credential request";
