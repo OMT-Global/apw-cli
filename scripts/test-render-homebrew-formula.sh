@@ -23,6 +23,8 @@ normalized_sha256="$(printf '%s' "$sha256" | tr 'A-F' 'a-f')"
 grep -q "version \"$version\"" "$formula_output"
 grep -q "refs/tags/v${version}.tar.gz" "$formula_output"
 grep -q "sha256 \"$normalized_sha256\"" "$formula_output"
+grep -q "formula-plus-app-install" "$formula_output"
+grep -q "apw app install" "$formula_output"
 
 if "$ROOT_DIR/scripts/render-homebrew-formula.sh" v9.8.7 "$normalized_sha256" "$ROOT_DIR/packaging/homebrew/apw.rb.template" "$formula_output" >/dev/null 2>&1; then
   echo "render-homebrew-formula accepted a version with leading v." >&2

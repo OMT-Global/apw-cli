@@ -248,7 +248,6 @@ fn legacy_daemon_commands_emit_deprecation_warning() {
         for args in [
             &["auth", "logout"][..],
             &["pw", "list", "bad host"][..],
-            &["otp", "list", "bad host"][..],
             &["start", "--dry-run"][..],
         ] {
             let output = run_rust_cli(home, args);
@@ -490,21 +489,14 @@ fn parity_data_plane_queries_match_legacy() {
 
         let rust_pw = run_rust_cli(home, &["--json", "pw", "get", "example.com", "alice"]);
         let deno_pw = run_deno_cli(home, &["--json", "pw", "get", "example.com", "alice"]);
-        let rust_otp = run_rust_cli(home, &["--json", "otp", "list", "example.com"]);
-        let deno_otp = run_deno_cli(home, &["--json", "otp", "list", "example.com"]);
 
         assert_eq!(rust_pw.status, 0, "rust pw failed: {rust_pw:#?}");
         assert_eq!(deno_pw.status, 0, "deno pw failed: {deno_pw:#?}");
-        assert_eq!(rust_otp.status, 0, "rust otp failed: {rust_otp:#?}");
-        assert_eq!(deno_otp.status, 0, "deno otp failed: {deno_otp:#?}");
 
         let rust_pw_payload = parse_json_output(&rust_pw);
         let deno_pw_payload = parse_json_output(&deno_pw);
-        let rust_otp_payload = parse_json_output(&rust_otp);
-        let deno_otp_payload = parse_json_output(&deno_otp);
 
         assert_eq!(rust_pw_payload["payload"], deno_pw_payload["payload"]);
-        assert_eq!(rust_otp_payload["payload"], deno_otp_payload["payload"]);
     });
 
     handle.join().expect("daemon failed");
@@ -734,20 +726,6 @@ fn parity_command_matrix_matches_legacy() {
             expect_code: 0,
         },
         CommandCase {
-            name: "otp-list",
-            rust_args: &["--json", "otp", "list", "example.com"],
-            deno_args: &["--json", "otp", "list", "example.com"],
-            require_session: true,
-            expect_code: 0,
-        },
-        CommandCase {
-            name: "otp-get",
-            rust_args: &["--json", "otp", "get", "example.com"],
-            deno_args: &["--json", "otp", "get", "example.com"],
-            require_session: true,
-            expect_code: 0,
-        },
-        CommandCase {
             name: "invalid-url-blocked-before-daemon",
             rust_args: &["--json", "pw", "list", "bad host"],
             deno_args: &["--json", "pw", "list", "bad host"],
@@ -827,7 +805,7 @@ fn parity_command_matrix_matches_legacy() {
                     assert!(rust_error.contains("Incorrect"), "{}", case.name);
                     assert!(deno_error.contains("Incorrect"), "{}", case.name);
                 }
-                "pw-list" | "pw-get" | "otp-list" | "otp-get" => {
+                "pw-list" | "pw-get" => {
                     assert_eq!(
                         rust_payload["payload"], deno_payload["payload"],
                         "{} payload mismatch",
@@ -863,14 +841,12 @@ fn deprecated_legacy_commands_emit_stderr_warning() {
     // legacy daemon path must announce its deprecation on stderr so that
     // pinned scripts get a migration signal before the daemon is removed.
     run_with_temp_home(|home| {
-        for command in ["pw", "otp"] {
-            let output = run_rust_cli(home, &[command, "list", "https://example.com"]);
-            assert!(
-                output.stderr.contains("legacy daemon path"),
-                "`apw {command}` must emit the deprecation warning on stderr; got stderr=\"{}\"",
-                output.stderr
-            );
-        }
+        let pw = run_rust_cli(home, &["pw", "list", "https://example.com"]);
+        assert!(
+            pw.stderr.contains("legacy daemon path"),
+            "`apw pw` must emit the deprecation warning on stderr; got stderr=\"{}\"",
+            pw.stderr
+        );
 
         let auth = run_rust_cli(home, &["auth", "--pin", "12ab"]);
         assert!(

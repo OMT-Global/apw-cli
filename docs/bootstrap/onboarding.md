@@ -25,6 +25,7 @@
     - Confirm branch protection points at the `CI Gate` status.
     - Confirm `delete branch on merge` and `allow auto-merge` are enabled.
     - Confirm projects and wiki are disabled in live repository settings.
+    - Confirm the GitHub Security Policy surface is enabled from `SECURITY.md`.
     - Confirm `dev`, `stage`, and `prod` GitHub environments exist with the reviewer gates described below.
 
     ## Environments
@@ -40,6 +41,7 @@
     - Docker, service-container, browser, and `container:` workloads stay on GitHub-hosted runners.
     - Keep PR checks cheap. Add heavy validation to `scripts/ci/run-extended-validation.sh` instead of the PR lane.
     - APW extended validation requires both Rust (`cargo`) and the macOS Swift toolchain, so the `extended-checks` job must run on the org macOS self-hosted pool (`[self-hosted, private, macOS, ARM64, xcode]`) rather than the Synology shell-only pool.
+    - Rust builds OpenSSL through the `openssl` crate's vendored feature, so the macOS runner needs source-build tools (`cc`, `make`, and `perl`) but does not require Homebrew, pkg-config, or a system OpenSSL prefix.
 
     ## Release Prep
 
