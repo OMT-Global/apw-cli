@@ -461,13 +461,13 @@ pub fn native_host_failure_message(base_message: &str) -> String {
 
     let guidance = match status {
         "app_missing" | "launch_agent_missing" | "launch_agent_unloaded" => {
-            "Run `apw host install`, then `apw host doctor`, then `apw start`."
+            "Run `apw host install`, then `apw host doctor`; use `apw app launch` for the supported v2 broker."
         }
         "helper_missing" => {
             "The Apple helper is unavailable on this host; run `apw host doctor` for details."
         }
         "ready" => {
-            "Run `apw host doctor` and ensure the native host stays attached after `apw start`."
+            "Run `apw host doctor`; use `apw app launch` for the supported v2 broker."
         }
         _ => "Run `apw host doctor` for native host diagnostics.",
     };
@@ -840,7 +840,7 @@ mod tests {
 
             let message = native_host_failure_message("Base failure.");
             assert!(message
-                .contains("Run `apw host install`, then `apw host doctor`, then `apw start`."));
+                .contains("Run `apw host install`, then `apw host doctor`; use `apw app launch`"));
             assert!(message.contains("daemon.preflight.status=app_missing"));
         });
     }
