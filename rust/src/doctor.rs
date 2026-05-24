@@ -259,7 +259,7 @@ fn configured_associated_domains() -> Vec<String> {
     if let Ok(raw) = std::env::var("APW_AASA_DOMAINS") {
         return parse_domain_list(&raw);
     }
-    crate::utils::read_config_file_or_empty().supported_domains
+    crate::utils::configured_supported_domains_non_destructive()
 }
 
 fn parse_http_status(line: &str) -> Option<u16> {
@@ -525,6 +525,24 @@ mod tests {
         with_temp_home(|_| {
             std::env::remove_var("APW_AASA_DOMAINS");
             assert!(check_associated_domains().is_none());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn associated_domains_check_preserves_invalid_config_when_env_unset() {
+        with_temp_home(|home| {
+            std::env::remove_var("APW_AASA_DOMAINS");
+            let apw_dir = home.join(".apw");
+            fs::create_dir_all(&apw_dir).expect("failed to create .apw");
+            let config_path = apw_dir.join("config.json");
+            fs::write(&config_path, "{invalid").expect("failed to write invalid config");
+
+            assert!(check_associated_domains().is_none());
+            assert!(
+                config_path.exists(),
+                "doctor must not clear malformed config"
+            );
         });
     }
 

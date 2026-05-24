@@ -252,6 +252,24 @@ pub fn read_config_file() -> Result<APWConfigV1> {
     read_config_file_or_null()
 }
 
+fn read_user_supported_domains_non_destructive() -> Vec<String> {
+    let Ok(content) = fs::read_to_string(config_path()) else {
+        return Vec::new();
+    };
+    let Ok(parsed) = serde_json::from_str::<Value>(&content) else {
+        return Vec::new();
+    };
+    serde_json::from_value::<APWConfigV1>(parsed)
+        .ok()
+        .filter(|config| config.schema == CONFIG_SCHEMA)
+        .map(|config| config.supported_domains)
+        .unwrap_or_default()
+}
+
+pub fn configured_supported_domains_non_destructive() -> Vec<String> {
+    read_user_supported_domains_non_destructive()
+}
+
 pub fn validate_external_provider_path(
     provider: ExternalFallbackProvider,
     provider_path: &str,
@@ -973,6 +991,20 @@ mod tests {
 
             assert!(read_config_file_or_null().is_err());
             assert!(!config_path_for_test().exists());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn supported_domain_probe_read_preserves_invalid_user_config() {
+        with_temp_home(|| {
+            fs::create_dir_all(config_root()).unwrap();
+            fs::write(config_path_for_test(), "{invalid").unwrap();
+
+            let domains = configured_supported_domains_non_destructive();
+
+            assert!(domains.is_empty());
+            assert!(config_path_for_test().exists());
         });
     }
 
