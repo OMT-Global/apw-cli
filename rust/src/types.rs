@@ -187,6 +187,13 @@ pub struct APWConfigV1 {
     )]
     pub fallback_provider_path: Option<String>,
     #[serde(
+        rename = "fallbackProviderDatabase",
+        alias = "fallback_provider_database",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub fallback_provider_database: Option<String>,
+    #[serde(
         rename = "fallbackProviderTimeoutMs",
         alias = "fallback_provider_timeout_ms",
         default,
@@ -224,6 +231,7 @@ impl Default for APWConfigV1 {
             supported_domains: Vec::new(),
             fallback_provider: None,
             fallback_provider_path: None,
+            fallback_provider_database: None,
             fallback_provider_timeout_ms: None,
             fallback_provider_max_invocations: None,
             created_at: Utc::now().to_rfc3339(),
@@ -292,6 +300,12 @@ pub struct APWRuntimeConfig {
     )]
     pub fallback_provider_path: Option<String>,
     #[serde(
+        rename = "fallbackProviderDatabase",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub fallback_provider_database: Option<String>,
+    #[serde(
         rename = "fallbackProviderTimeoutMs",
         default,
         skip_serializing_if = "Option::is_none"
@@ -325,6 +339,7 @@ impl Default for APWRuntimeConfig {
             bridge_last_error: None,
             fallback_provider: None,
             fallback_provider_path: None,
+            fallback_provider_database: None,
             fallback_provider_timeout_ms: None,
             fallback_provider_max_invocations: None,
             created_at: Utc::now().to_rfc3339(),
@@ -338,6 +353,10 @@ pub enum ExternalFallbackProvider {
     OnePassword,
     #[serde(rename = "bitwarden")]
     Bitwarden,
+    #[serde(rename = "keepassxc")]
+    KeePassXC,
+    #[serde(rename = "pass")]
+    Pass,
 }
 
 impl ExternalFallbackProvider {
@@ -345,6 +364,8 @@ impl ExternalFallbackProvider {
         match self {
             Self::OnePassword => "1password",
             Self::Bitwarden => "bitwarden",
+            Self::KeePassXC => "keepassxc",
+            Self::Pass => "pass",
         }
     }
 }

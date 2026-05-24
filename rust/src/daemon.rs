@@ -2603,7 +2603,7 @@ mod tests {
             match socket.recv(&mut buffer) {
                 Ok(size) => break size,
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) => panic!("failed to receive daemon response: {error}"),
+                Err(error) => panic!("failed to receive daemon test response: {error}"),
             }
         };
         serde_json::from_slice(&buffer[..size]).unwrap()
