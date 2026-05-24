@@ -72,6 +72,22 @@ The release archive, release notes, and appcast must be signed with Sparkle's
 EdDSA key. The private EdDSA key must stay in release automation secrets or a
 release keychain and must never be committed to this repository.
 
+Sparkle appcast preparation should use the checked helper:
+
+```bash
+./scripts/prepare-sparkle-appcast.sh \
+  --archive dist/APW.app.zip \
+  --release-notes dist/APW.app.release.md \
+  --updates-dir dist/sparkle-updates \
+  --generate-appcast /path/to/Sparkle/bin/generate_appcast
+```
+
+The helper copies the signed/notarized archive and release notes into the
+updates directory, runs Sparkle's `generate_appcast`, and fails if the resulting
+appcast does not contain EdDSA signatures or does not reference the release
+archive. Private EdDSA key material stays with Sparkle's configured signing
+environment, such as Keychain-backed release automation.
+
 ## Managed update control
 
 Enterprise administrators can disable user-driven update checks with this
@@ -113,8 +129,9 @@ Run the contract check with:
 
 ```bash
 ./scripts/ci/validate-appcast-contract.sh
+./scripts/test-prepare-sparkle-appcast.sh
 ```
 
 The fast PR check runs the same validator so changes to the appcast template,
-security-update wording, MDM key, or Sparkle security settings fail before
-release automation drifts.
+security-update wording, MDM key, Sparkle security settings, or appcast
+preparation helper fail before release automation drifts.

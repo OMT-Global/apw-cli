@@ -36,6 +36,7 @@ while IFS= read -r -d '' script; do
 done < <(find .github/scripts scripts -type f -name '*.sh' -print0)
 
 ./scripts/test-render-homebrew-formula.sh
+./scripts/test-prepare-sparkle-appcast.sh
 ./scripts/ci/validate-appcast-contract.sh
 
 echo "APW fast checks passed."
