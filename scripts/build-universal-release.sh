@@ -9,13 +9,19 @@ Build universal arm64 + x86_64 release binaries:
   - rust/target/release/apw
   - native-app/dist/APW.app/Contents/MacOS/APW
 
-Requires macOS, rustup, cargo, SwiftPM, and lipo.
+Requires macOS, rustup, cargo, SwiftPM, lipo, and vendored OpenSSL build tools.
 HELP
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   print_help
   exit 0
+fi
+
+CHECK_BUILD_INPUTS=0
+if [[ "${1:-}" == "--check-build-inputs" ]]; then
+  CHECK_BUILD_INPUTS=1
+  shift
 fi
 
 if [[ $# -ne 0 ]]; then
@@ -31,50 +37,22 @@ RUSTUP_BIN="${RUSTUP_BIN:-rustup}"
 LIPO_BIN="${LIPO_BIN:-lipo}"
 TARGETS=(aarch64-apple-darwin x86_64-apple-darwin)
 
-export_openssl_prefix() {
-  local env_prefix="$1"
-  local prefix="$2"
+ensure_vendored_openssl_build_inputs() {
+  [[ "${OSTYPE:-}" == darwin* || "${APW_FORCE_OPENSSL_INPUT_CHECK:-}" == "1" ]] || return 0
 
-  export "${env_prefix}_OPENSSL_DIR=$prefix"
-  export "${env_prefix}_OPENSSL_INCLUDE_DIR=$prefix/include"
-  export "${env_prefix}_OPENSSL_LIB_DIR=$prefix/lib"
-}
-
-configure_macos_openssl() {
-  local arm_prefix="${AARCH64_APPLE_DARWIN_OPENSSL_DIR:-}"
-  local x86_prefix="${X86_64_APPLE_DARWIN_OPENSSL_DIR:-}"
-  local brew_prefix=""
-
-  if [[ -z "$arm_prefix" && -d "/opt/homebrew/opt/openssl@3" ]]; then
-    arm_prefix="/opt/homebrew/opt/openssl@3"
-  fi
-  if [[ -z "$x86_prefix" && -d "/usr/local/opt/openssl@3" ]]; then
-    x86_prefix="/usr/local/opt/openssl@3"
-  fi
-  if command -v brew >/dev/null 2>&1; then
-    brew_prefix="$(brew --prefix openssl@3 2>/dev/null || true)"
-  fi
-  if [[ -n "$brew_prefix" && -d "$brew_prefix" ]]; then
-    if [[ -z "$arm_prefix" && "$(uname -m)" == "arm64" ]]; then
-      arm_prefix="$brew_prefix"
+  local missing=()
+  for tool in cc make perl; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      missing+=("$tool")
     fi
-    if [[ -z "$x86_prefix" && "$(uname -m)" == "x86_64" ]]; then
-      x86_prefix="$brew_prefix"
-    fi
-  fi
+  done
 
-  if [[ -z "$arm_prefix" || ! -d "$arm_prefix/include" || ! -d "$arm_prefix/lib" ]]; then
-    echo "arm64 OpenSSL prefix not found. Install openssl@3 or export AARCH64_APPLE_DARWIN_OPENSSL_DIR." >&2
+  if ((${#missing[@]} > 0)); then
+    echo "Missing required tool(s) for vendored OpenSSL build: ${missing[*]}" >&2
+    echo "Install Xcode Command Line Tools and Perl on the macOS release runner." >&2
+    echo "If intentionally using system OpenSSL, set OPENSSL_NO_VENDOR=1 and provide OPENSSL_DIR/PKG_CONFIG_PATH." >&2
     exit 1
   fi
-  if [[ -z "$x86_prefix" || ! -d "$x86_prefix/include" || ! -d "$x86_prefix/lib" ]]; then
-    echo "x86_64 OpenSSL prefix not found. Install Intel openssl@3 or export X86_64_APPLE_DARWIN_OPENSSL_DIR." >&2
-    exit 1
-  fi
-
-  export_openssl_prefix AARCH64_APPLE_DARWIN "$arm_prefix"
-  export_openssl_prefix X86_64_APPLE_DARWIN "$x86_prefix"
-  export PKG_CONFIG_ALLOW_CROSS="${PKG_CONFIG_ALLOW_CROSS:-1}"
 }
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -82,7 +60,12 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
-configure_macos_openssl
+ensure_vendored_openssl_build_inputs
+
+if [[ "$CHECK_BUILD_INPUTS" -eq 1 ]]; then
+  echo "Universal release build inputs are available."
+  exit 0
+fi
 
 if ! command -v "$RUSTUP_BIN" >/dev/null 2>&1 && [[ -x "$HOME/.cargo/bin/rustup" ]]; then
   RUSTUP_BIN="$HOME/.cargo/bin/rustup"
