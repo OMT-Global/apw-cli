@@ -291,11 +291,7 @@ fn check_associated_domains() -> Option<DoctorCheck> {
                 .map(str::to_string)
                 .collect::<Vec<_>>()
         })
-        .unwrap_or_else(|| {
-            crate::utils::read_config_file()
-                .map(|config| config.supported_domains)
-                .unwrap_or_default()
-        });
+        .unwrap_or_else(crate::utils::configured_supported_domains_non_destructive);
     let domains: Vec<&str> = configured_domains.iter().map(String::as_str).collect();
     if domains.is_empty() {
         return None;
