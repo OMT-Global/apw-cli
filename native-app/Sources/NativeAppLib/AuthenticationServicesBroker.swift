@@ -154,7 +154,9 @@ public protocol CredentialBroker {
         return .notHandled
       case .unknown:
         return .unknown
-      @unknown default:
+      default:
+        // SDK-specific and future AuthenticationServices cases are
+        // intentionally collapsed into the stable wire-level bucket.
         return .unknown
       }
     }
