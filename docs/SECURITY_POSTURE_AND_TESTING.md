@@ -50,6 +50,38 @@ Release reference version: `v2.0.0`
   the doctor command
 - timed-out requests do not cache or persist partially returned credentials
 
+### Diagnostic-bundle export
+
+`apw doctor --bundle <path>` writes a tar.gz that operators can attach to
+support requests. The bundle is deterministic and fails closed rather than
+shipping incompletely-redacted material.
+
+Layout (see `rust/src/bundle.rs` for the source of truth):
+
+```
+apw-doctor-bundle/
+  manifest.json                # bundleVersion, files, redaction guarantees
+  doctor.json                  # full `apw doctor --json` payload
+  environment.json             # `apw doctor --ci` environment checks
+  os.json                      # uname, arch/os, sw_vers on macOS
+  native-app/file-listing.json # path/size/mode for files under ~/.apw/native-app/
+```
+
+Redaction guarantees:
+
+- environment variables are never read or copied into the bundle
+- file contents under `~/.apw/native-app/` are never read — only the metadata
+  listing (relative path, byte size, octal mode, file type) is included
+- `credentials.json`, `config.json`, and `broker.log` are explicitly excluded
+- every string in the bundle JSON is scanned for token-like patterns
+  (long high-entropy alphanumeric runs, common vendor key prefixes, and the
+  in-tree demo password sentinel); a match aborts the bundle with an
+  `InvalidConfig` (102) error and does not write the archive
+- the archive file is written mode `0600`
+
+If an operator needs to share broker logs or config they attach those
+separately, after redacting by hand.
+
 ## Required release gates
 
 Run these before publishing:
@@ -77,6 +109,8 @@ The Rust test suite covers:
 - native app diagnostics and `APW_DEMO=1` bootstrap credential file initialization
 - end-to-end v2 app install, launch, status, doctor, and login flows
 - direct-exec fallback, unsupported-domain handling, denial handling, and malformed broker response mapping
+- diagnostic-bundle layout, archive permissions, and fail-closed redaction
+  when a plausible credential pattern would otherwise reach the bundle
 - external fallback provider path hardening, including relative paths, `~`, world-writable
   executables, and symlink targets
 - diagnostic-bundle redaction and fail-closed aborts when staged diagnostics look
