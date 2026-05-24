@@ -226,8 +226,10 @@ Deliverables:
 
 - The integration is unverified against a notarized build with
   associated-domain entitlements wired (the macOS build cannot be
-  exercised from CI on Linux). A follow-up validation pass on a real
-  macOS host is required before declaring Phase 3 complete.
+  exercised from CI on Linux). Run
+  `scripts/validate-phase3-hardware.sh` on a real macOS host and attach a
+  completed `docs/phase3-hardware-validation-report.md` before declaring
+  Phase 3 complete.
 - Domain expansion beyond `example.com` is tracked in issue #8.
 
 ### Phase 4: command migration and deprecation
