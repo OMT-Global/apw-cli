@@ -22,6 +22,10 @@ if APW_NOTARIZE_REQUIRED=1 APW_APP_BUNDLE_PATH="$fake_app" "$ROOT_DIR/scripts/no
   exit 1
 fi
 grep -q "APPLE_DEVELOPER_CERT_P12" "$required_log"
+if grep -q "APPLE_TEAM_ID" "$ROOT_DIR/scripts/notarize-native-app.sh"; then
+  echo "notarize-native-app must not require unused Apple Team ID credentials." >&2
+  exit 1
+fi
 
 APW_APP_BUNDLE_PATH="$fake_app" "$ROOT_DIR/scripts/notarize-native-app.sh" >"$optional_log" 2>&1
 grep -q "Skipping notarization" "$optional_log"
