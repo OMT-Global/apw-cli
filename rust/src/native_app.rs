@@ -1805,7 +1805,7 @@ fn pass_pick_entry(find_output: &str, host: &str) -> Option<String> {
     // actual entry rows. The `Search Terms:` header and the `Password
     // Store` root are not entries. Each rendered level is 4 columns wide
     // (`└── ` or `├── ` or `│   `).
-    let mut candidates: Vec<String> = Vec::new();
+    let mut rows: Vec<(usize, String)> = Vec::new();
     let mut stack: Vec<String> = Vec::new();
     for raw_line in find_output.lines() {
         let line = raw_line.trim_end();
@@ -1822,8 +1822,21 @@ fn pass_pick_entry(find_output: &str, host: &str) -> Option<String> {
         }
         stack.truncate(depth);
         stack.push(name.to_string());
-        candidates.push(stack.join("/"));
+        rows.push((depth, stack.join("/")));
     }
+
+    let candidates: Vec<&str> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (depth, path))| {
+            let is_leaf = rows
+                .get(index + 1)
+                .map(|(next_depth, _)| next_depth <= depth)
+                .unwrap_or(true);
+            is_leaf.then_some(path.as_str())
+        })
+        .collect();
+
     candidates
         .iter()
         .find(|c| {
@@ -1832,8 +1845,13 @@ fn pass_pick_entry(find_output: &str, host: &str) -> Option<String> {
                 .map(|leaf| leaf == host)
                 .unwrap_or(false)
         })
+        .or_else(|| {
+            candidates
+                .iter()
+                .find(|c| c.split('/').any(|segment| segment == host))
+        })
         .or_else(|| candidates.iter().find(|c| c.contains(host)))
-        .cloned()
+        .map(|c| (*c).to_string())
 }
 
 fn pass_line_is_tree_entry(line: &str) -> bool {
@@ -2692,6 +2710,21 @@ print(json.dumps({
         .join("\n");
         let picked = pass_pick_entry(&listing, "example.com");
         assert_eq!(picked.as_deref(), Some("web/example.com"));
+    }
+
+    #[test]
+    fn pass_pick_entry_resets_stack_and_selects_leaf_under_second_root() {
+        let listing = [
+            "Search Terms: example.com",
+            "├── old-root",
+            "│   └── old.example.com",
+            "└── web",
+            "    └── example.com",
+            "        └── alice",
+        ]
+        .join("\n");
+        let picked = pass_pick_entry(&listing, "example.com");
+        assert_eq!(picked.as_deref(), Some("web/example.com/alice"));
     }
 
     #[test]
