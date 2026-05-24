@@ -56,7 +56,7 @@ func demoModeEnabled() -> Bool {
 }
 
 func managedUpdatesDisabled(
-  defaults: UserDefaults = UserDefaults(suiteName: managedUpdatePreferenceDomain) ?? .standard
+  defaults: UserDefaults = .standard
 ) -> Bool {
   defaults.bool(forKey: updatesDisabledPreferenceKey)
 }
@@ -283,18 +283,20 @@ final class BrokerServer {
   private let approvalPrompter: ApprovalPrompter
   private let credentialBroker: CredentialBroker?
   private let updatePolicyDefaults: UserDefaults
+  private let updateRuntime: InAppUpdateRuntime
 
   init(
     paths: AppPaths,
     approvalPrompter: ApprovalPrompter = SystemApprovalPrompter(),
     credentialBroker: CredentialBroker? = defaultCredentialBroker(),
-    updatePolicyDefaults: UserDefaults =
-      UserDefaults(suiteName: managedUpdatePreferenceDomain) ?? .standard
+    updatePolicyDefaults: UserDefaults = .standard,
+    updateRuntime: InAppUpdateRuntime? = nil
   ) {
     self.paths = paths
     self.approvalPrompter = approvalPrompter
     self.credentialBroker = credentialBroker
     self.updatePolicyDefaults = updatePolicyDefaults
+    self.updateRuntime = updateRuntime ?? APWInAppUpdateRuntime(defaults: updatePolicyDefaults)
   }
 
   func run() throws -> Never {
@@ -311,7 +313,7 @@ final class BrokerServer {
       "serviceStatus": "running",
       "pid": getpid(),
       "transport": "unix_socket",
-    ])
+    ].merging(startUpdateRuntimeStatus(), uniquingKeysWith: { _, new in new }))
 
     while true {
       let client = accept(descriptor, nil, nil)
@@ -653,7 +655,13 @@ final class BrokerServer {
     }
   }
 
-  private func writeStatus(extra: [String: Any]) throws {
+  func startUpdateRuntimeStatus() -> [String: Any] {
+    [
+      "updateRuntimeState": updateRuntime.startIfAllowed().rawValue,
+    ]
+  }
+
+  func writeStatus(extra: [String: Any]) throws {
     var payload = statusPayload()
     for (key, value) in extra {
       payload[key] = value

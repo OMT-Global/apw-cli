@@ -119,8 +119,9 @@ inventory stale installations.
 
 APW.app reads this managed key at runtime and reports the current
 `updatesDisabled` state plus the configured feed URL in the `inAppUpdates`
-status payload. Sparkle startup must consult this same helper before automatic
-or manual checks are enabled.
+status payload. APW.app links Sparkle through Swift Package Manager and starts
+`SPUStandardUpdaterController` only after this managed policy allows update
+checks.
 
 ## Security update surfacing
 

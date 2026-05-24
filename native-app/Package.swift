@@ -11,9 +11,15 @@ let package = Package(
         .library(name: "NativeAppLib", targets: ["NativeAppLib"]),
         .executable(name: "APW", targets: ["APW"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
+    ],
     targets: [
         .target(
             name: "NativeAppLib",
+            dependencies: [
+                .product(name: "Sparkle", package: "Sparkle"),
+            ],
             path: "Sources/NativeAppLib",
             resources: [
                 .process("Resources"),

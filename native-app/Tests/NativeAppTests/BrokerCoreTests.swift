@@ -19,6 +19,20 @@ private struct StubCredentialBroker: CredentialBroker {
   }
 }
 
+private final class StubUpdateRuntime: InAppUpdateRuntime {
+  private(set) var startCount = 0
+  let state: InAppUpdateRuntimeState
+
+  init(state: InAppUpdateRuntimeState = .starting) {
+    self.state = state
+  }
+
+  func startIfAllowed() -> InAppUpdateRuntimeState {
+    startCount += 1
+    return state
+  }
+}
+
 final class BrokerCoreTests: XCTestCase {
   private func makePaths(_ root: URL) -> AppPaths {
     AppPaths(
@@ -37,13 +51,15 @@ final class BrokerCoreTests: XCTestCase {
     root: URL,
     decision: Bool = true,
     credentialBroker: CredentialBroker? = nil,
-    updatePolicyDefaults: UserDefaults = .standard
+    updatePolicyDefaults: UserDefaults = .standard,
+    updateRuntime: InAppUpdateRuntime? = nil
   ) -> BrokerServer {
     BrokerServer(
       paths: makePaths(root),
       approvalPrompter: StubApprovalPrompter(decision: decision),
       credentialBroker: credentialBroker,
-      updatePolicyDefaults: updatePolicyDefaults
+      updatePolicyDefaults: updatePolicyDefaults,
+      updateRuntime: updateRuntime
     )
   }
 
@@ -292,6 +308,28 @@ final class BrokerCoreTests: XCTestCase {
     let defaults = try makeUpdatePolicyDefaults()
 
     XCTAssertEqual(managedUpdatesDisabled(defaults: defaults), false)
+  }
+
+  func testRunStartsUpdateRuntimeAndPersistsState() throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let updateRuntime = StubUpdateRuntime(state: .starting)
+    let server = makeServer(root: root, updateRuntime: updateRuntime)
+
+    try FileManager.default.createDirectory(
+      at: root,
+      withIntermediateDirectories: true,
+      attributes: nil
+    )
+    try server.writeStatus(extra: [
+      "serviceStatus": "running",
+    ].merging(server.startUpdateRuntimeStatus(), uniquingKeysWith: { _, new in new }))
+
+    let data = try Data(contentsOf: makePaths(root).statusPath)
+    let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+    XCTAssertEqual(updateRuntime.startCount, 1)
+    XCTAssertEqual(payload["updateRuntimeState"] as? String, "starting")
   }
 
   // MARK: - AuthenticationServices broker routing (issue #13)
