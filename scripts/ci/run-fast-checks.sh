@@ -42,5 +42,6 @@ done < <(find .github/scripts scripts -type f -name '*.sh' -print0)
 
 ./scripts/test-render-homebrew-formula.sh
 ./scripts/test-extended-validation-config.sh
+./scripts/test-native-automation-config.sh
 
 echo "APW fast checks passed."
