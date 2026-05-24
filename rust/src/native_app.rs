@@ -2826,6 +2826,60 @@ else:
 
     #[test]
     #[serial]
+    fn login_pass_uses_second_top_level_root_entry() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("pass");
+            fs::write(
+                &provider_path,
+                r##"#!/usr/bin/env python3
+import sys
+
+if sys.argv[1:] == ["find", "example.com"]:
+    print("Search Terms: example.com")
+    print("├── old-root")
+    print("│   └── old.example.com")
+    print("└── web")
+    print("    └── example.com")
+elif sys.argv[1:] == ["show", "web/example.com"]:
+    print("pass-secret")
+    print("user: alice@example.com")
+    print("url: https://example.com/login")
+else:
+    sys.stderr.write("unexpected pass invocation: " + repr(sys.argv[1:]) + "\n")
+    raise SystemExit(1)
+"##,
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::Pass),
+                fallback_provider_path: Some(provider_path.display().to_string()),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            let payload = native_app_login("https://example.com", true).unwrap();
+            assert_eq!(payload["source"], "pass");
+            assert_eq!(payload["username"], "alice@example.com");
+            assert_eq!(payload["password"], "pass-secret");
+            assert_eq!(payload["url"], "https://example.com/login");
+        });
+    }
+
+    #[test]
+    #[serial]
     fn login_pass_returns_no_results_when_entry_missing() {
         with_temp_home(|| {
             let provider_dir = TempDir::new().unwrap();
