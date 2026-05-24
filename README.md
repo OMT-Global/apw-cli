@@ -145,7 +145,7 @@ cache external-provider credentials.
   {
     "fallbackProvider": "keepassxc",
     "fallbackProviderPath": "/opt/homebrew/bin/keepassxc-cli",
-    "fallbackProviderDatabase": "/Users/example/Passwords.kdbx"
+    "fallbackProviderDatabase": "/path/to/Passwords.kdbx"
   }
   ```
 
