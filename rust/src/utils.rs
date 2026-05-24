@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::error::{APWError, Result};
 use crate::secrets::{delete_shared_key, read_shared_key, supports_keychain, write_shared_key};
 use crate::types::{
@@ -1240,10 +1242,10 @@ mod tests {
                 host: Some("127.0.0.1".to_string()),
                 allow_empty: true,
                 clear_auth: true,
-                runtime_mode: Some(RuntimeMode::Direct),
+                runtime_mode: Some(RuntimeMode::Auto),
                 last_launch_status: Some("ok".to_string()),
                 last_launch_error: None,
-                last_launch_strategy: Some("direct".to_string()),
+                last_launch_strategy: Some("archived".to_string()),
                 ..WriteConfigInput::default()
             })
             .unwrap();
@@ -1252,10 +1254,10 @@ mod tests {
             assert_eq!(written.host, "127.0.0.1");
             assert_eq!(written.username, "");
             assert_eq!(written.shared_key, "");
-            assert_eq!(written.runtime_mode, RuntimeMode::Direct);
+            assert_eq!(written.runtime_mode, RuntimeMode::Auto);
             assert_eq!(written.last_launch_status.as_deref(), Some("ok"));
             assert_eq!(written.last_launch_error, None);
-            assert_eq!(written.last_launch_strategy.as_deref(), Some("direct"));
+            assert_eq!(written.last_launch_strategy.as_deref(), Some("archived"));
 
             let runtime = read_config(Some(ConfigReadOptions {
                 require_auth: false,
@@ -1289,10 +1291,10 @@ mod tests {
                 port: Some(10_013),
                 host: Some("127.0.0.1".to_string()),
                 allow_empty: true,
-                runtime_mode: Some(RuntimeMode::Direct),
+                runtime_mode: Some(RuntimeMode::Auto),
                 last_launch_status: Some("failed".to_string()),
                 last_launch_error: Some("probe failed".to_string()),
-                last_launch_strategy: Some("direct".to_string()),
+                last_launch_strategy: Some("archived".to_string()),
                 ..WriteConfigInput::default()
             })
             .unwrap();
@@ -1334,10 +1336,10 @@ mod tests {
                 port: Some(10_013),
                 host: Some("127.0.0.1".to_string()),
                 allow_empty: true,
-                runtime_mode: Some(RuntimeMode::Direct),
+                runtime_mode: Some(RuntimeMode::Auto),
                 last_launch_status: Some("failed".to_string()),
                 last_launch_error: Some("probe failed".to_string()),
-                last_launch_strategy: Some("direct".to_string()),
+                last_launch_strategy: Some("archived".to_string()),
                 ..WriteConfigInput::default()
             })
             .unwrap();
@@ -1349,7 +1351,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn browser_bridge_metadata_resets_launch_fields_without_clearing_auth() {
+    fn archived_bridge_metadata_resets_launch_fields_without_clearing_auth() {
         with_temp_home(|| {
             supports_keychain_for_tests(Some(false));
             write_config(WriteConfigInput {
@@ -1359,10 +1361,10 @@ mod tests {
                 host: Some("127.0.0.1".to_string()),
                 allow_empty: false,
                 refresh_created_at: true,
-                runtime_mode: Some(RuntimeMode::Direct),
+                runtime_mode: Some(RuntimeMode::Auto),
                 last_launch_status: Some("failed".to_string()),
                 last_launch_error: Some("probe failed".to_string()),
-                last_launch_strategy: Some("direct".to_string()),
+                last_launch_strategy: Some("archived".to_string()),
                 ..WriteConfigInput::default()
             })
             .unwrap();
@@ -1371,7 +1373,7 @@ mod tests {
                 port: Some(10_013),
                 host: Some("127.0.0.1".to_string()),
                 allow_empty: true,
-                runtime_mode: Some(RuntimeMode::Browser),
+                runtime_mode: Some(RuntimeMode::Auto),
                 bridge_status: Some("attached".to_string()),
                 bridge_browser: Some("chrome".to_string()),
                 bridge_connected_at: Some("2026-03-08T00:00:00Z".to_string()),
@@ -1381,7 +1383,7 @@ mod tests {
             })
             .unwrap();
 
-            assert_eq!(written.runtime_mode, RuntimeMode::Browser);
+            assert_eq!(written.runtime_mode, RuntimeMode::Auto);
             assert_eq!(written.username, "alice");
             assert_eq!(written.bridge_status.as_deref(), Some("attached"));
             assert_eq!(written.bridge_browser.as_deref(), Some("chrome"));

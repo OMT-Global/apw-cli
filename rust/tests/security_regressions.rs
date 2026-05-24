@@ -48,29 +48,6 @@ fn parse_json_output(value: &str) -> Value {
     serde_json::from_str(value).unwrap_or_else(|_| panic!("expected json response, got {}", value))
 }
 
-fn write_launch_failure_config(home: &Path, last_launch_error: &str) {
-    let config = serde_json::json!({
-        "schema": 1,
-        "port": 10_000,
-        "host": "127.0.0.1",
-        "username": "",
-        "sharedKey": "",
-        "runtimeMode": "auto",
-        "lastLaunchStatus": "failed",
-        "lastLaunchError": last_launch_error,
-        "lastLaunchStrategy": "direct",
-        "secretSource": "file",
-        "createdAt": Utc::now().to_rfc3339(),
-    });
-
-    fs::create_dir_all(home.join(".apw")).expect("failed to create config directory");
-    fs::write(
-        home.join(".apw/config.json"),
-        serde_json::to_vec_pretty(&config).expect("failed to serialize config"),
-    )
-    .expect("failed to write config");
-}
-
 fn write_fallback_provider_config(home: &Path, provider_path: &str) {
     let config = serde_json::json!({
         "schema": 1,
@@ -170,24 +147,26 @@ fn status_json_has_stable_shape() {
         );
         let output = parse_json_output(&stdout);
         assert_eq!(output["ok"], true);
-        assert_eq!(output["payload"]["releaseLine"]["target"], "v2.0.0");
-        assert!(output["payload"]["app"].is_object());
-        assert_eq!(output["payload"]["app"]["installed"], false);
-        assert!(output["payload"]["daemon"]["host"].is_string());
-        assert!(output["payload"]["daemon"]["port"].is_u64());
-        assert!(output["payload"]["host"].is_object());
-        assert!(output["payload"]["host"]["status"].is_null());
-        assert!(output["payload"]["host"]["bundleVersion"].is_null());
-        assert!(output["payload"]["host"]["connectedAt"].is_null());
-        assert!(output["payload"]["host"]["lastError"].is_null());
-        assert!(output["payload"]["bridge"].is_object());
-        assert!(output["payload"]["bridge"]["status"].is_null());
-        assert!(output["payload"]["bridge"]["browser"].is_null());
-        assert!(output["payload"]["bridge"]["connectedAt"].is_null());
-        assert!(output["payload"]["bridge"]["lastError"].is_null());
-        assert_eq!(output["payload"]["session"]["authenticated"], false);
-        assert!(output["payload"]["session"]["createdAt"].is_string());
-        assert!(output["payload"]["session"]["expired"].is_boolean());
+        assert_eq!(output["payload"]["installed"], false);
+        assert!(output["payload"]["bundlePath"].is_string());
+        assert!(output["payload"]["executablePath"].is_string());
+        assert!(output["payload"]["socketPath"].is_string());
+        assert!(output["payload"]["credentialsPath"].is_string());
+        assert!(output["payload"]["brokerLogPath"].is_string());
+        assert_eq!(output["payload"]["externalFallback"]["configured"], false);
+        assert_eq!(
+            output["payload"]["externalFallback"]["loginFlag"],
+            "--external-fallback"
+        );
+        assert_eq!(
+            output["payload"]["service"]["transportContract"],
+            "typed_json_envelope"
+        );
+        assert!(output["payload"]["service"]["requestTimeoutMs"].is_u64());
+        assert!(output["payload"]["daemon"].is_null());
+        assert!(output["payload"]["host"].is_null());
+        assert!(output["payload"]["bridge"].is_null());
+        assert!(output["payload"]["session"].is_null());
     });
 }
 
@@ -333,22 +312,20 @@ fn status_binary_with_nonexistent_home_directory_isolated() {
 
 #[test]
 #[serial]
-fn status_json_preserves_failed_launch_metadata_after_command_failure() {
+fn status_json_reports_native_app_surface_after_command_failure() {
     with_temp_home(|home| {
-        write_launch_failure_config(
-            home,
-            "Helper process was terminated by SIGKILL (Code Signature Constraint Violation).",
-        );
-
         let (status, stdout, stderr) = run_command(home, &["status", "--json"]);
         assert_eq!(
             status, 0,
             "status={status}, stdout={stdout}, stderr={stderr}"
         );
         let initial = parse_json_output(&stdout);
-        assert_eq!(initial["payload"]["daemon"]["runtimeMode"], "auto");
-        assert_eq!(initial["payload"]["daemon"]["lastLaunchStatus"], "failed");
-        assert_eq!(initial["payload"]["daemon"]["lastLaunchStrategy"], "direct");
+        assert!(initial["payload"]["bundlePath"].is_string());
+        assert_eq!(initial["payload"]["service"]["transport"], "unix_socket");
+        assert_eq!(
+            initial["payload"]["service"]["transportContract"],
+            "typed_json_envelope"
+        );
 
         let (login_status, login_stdout, login_stderr) =
             run_command(home, &["--json", "login", "ftp://example.com"]);
@@ -363,12 +340,11 @@ fn status_json_preserves_failed_launch_metadata_after_command_failure() {
             "status={status_after}, stdout={stdout_after}, stderr={stderr_after}"
         );
         let after = parse_json_output(&stdout_after);
-        assert_eq!(after["payload"]["daemon"]["runtimeMode"], "auto");
-        assert_eq!(after["payload"]["daemon"]["lastLaunchStatus"], "failed");
+        assert!(after["payload"]["daemon"].is_null());
+        assert_eq!(after["payload"]["service"]["transport"], "unix_socket");
         assert_eq!(
-            after["payload"]["daemon"]["lastLaunchError"],
-            "Helper process was terminated by SIGKILL (Code Signature Constraint Violation)."
+            after["payload"]["externalFallback"]["loginFlag"],
+            "--external-fallback"
         );
-        assert_eq!(after["payload"]["session"]["authenticated"], false);
     });
 }

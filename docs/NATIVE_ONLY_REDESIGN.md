@@ -268,19 +268,18 @@ Deliverables:
 ### Rust changes
 
 - add an app/XPC client module
-- deprecate daemon/helper-specific runtime modes in CLI help
 - introduce a new command family:
   - `apw app install`
   - `apw app launch`
   - `apw doctor`
   - `apw login <url>`
 
-### Code to archive after cutover
+### Archived after cutover
 
-- `browser-bridge/`
-- native-host private-helper bridge code
-- helper manifest install scripts
-- launchd/direct helper runtime modes
+- `legacy/browser-bridge/`
+- `legacy/native-host/`
+- `legacy/scripts/`
+- `legacy/rust-src/` for the former daemon/browser/native-host internals
 
 ## Security requirements
 
@@ -331,8 +330,7 @@ These are product decisions, not implementation bugs.
 
 1. Create `docs/NATIVE_MIGRATION.md` with a command-by-command migration matrix.
 2. Create `native-app/` with the minimal signed app skeleton.
-3. Prototype `apw status` against a local app presence check instead of the
-   current native-host helper flow.
+3. Keep `apw status` focused on the local app broker presence check.
 4. Spike one supported credential request flow for a single associated domain.
 5. Decide whether `v2.0.0` is a hard product break or ships with a temporary
    compatibility shim for `pw get`.

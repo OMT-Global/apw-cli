@@ -874,7 +874,7 @@ pub fn native_app_doctor() -> Result<Value> {
             json!({
                 "target": "v2.0.0",
                 "version": VERSION,
-                "legacyParityCommandsRetained": true,
+                "legacyRuntimeArchive": "legacy/",
             }),
         );
         object.insert(
@@ -2092,13 +2092,9 @@ print(json.dumps([{"login":{"username":"alice@example.com","password":"secret","
             fs::write(
                 &provider_path,
                 format!(
-                    r#"#!/usr/bin/env python3
-import os
-import pathlib
-import time
-
-pathlib.Path({pid_path:?}).write_text(str(os.getpid()), encoding="utf-8")
-time.sleep(10)
+                    r#"#!/bin/sh
+printf '%s' "$$" > {pid_path:?}
+sleep 10
 "#,
                     pid_path = pid_path.display().to_string()
                 ),

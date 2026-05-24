@@ -296,7 +296,6 @@ cargo fmt --manifest-path "$CARGO_MANIFEST" -- --check
 cargo clippy --manifest-path "$CARGO_MANIFEST" --all-targets -- -D warnings
 if [[ "$SKIP_TESTS" -eq 0 ]]; then
   cargo test --manifest-path "$CARGO_MANIFEST"
-  cargo test --manifest-path "$CARGO_MANIFEST" --test legacy_parity
   cargo test --manifest-path "$CARGO_MANIFEST" --test security_regressions
 fi
 
@@ -315,17 +314,8 @@ printf '\n[5/9] Health check release binary...\n'
 "$BIN_PATH" status --json
 
 if [[ "$HOST_SMOKE" -eq 1 ]]; then
-  printf '\n[6/9] Running browser host smoke...\n'
-  if [[ -n "$HOST_SMOKE_OTP_DOMAIN" ]]; then
-    "$ROOT_DIR/scripts/browser-host-smoke.sh" \
-      --bin "$BIN_PATH" \
-      --pw-domain "$HOST_SMOKE_PW_DOMAIN" \
-      --otp-domain "$HOST_SMOKE_OTP_DOMAIN"
-  else
-    "$ROOT_DIR/scripts/browser-host-smoke.sh" \
-      --bin "$BIN_PATH" \
-      --pw-domain "$HOST_SMOKE_PW_DOMAIN"
-  fi
+  printf '\n[6/9] Browser host smoke is archived for v2.1.0.\n'
+  echo "Use legacy/scripts/browser-host-smoke.sh only for explicit historical audits."
 fi
 
 printf '\n[7/9] Creating tag %s...\n' "$TAG"

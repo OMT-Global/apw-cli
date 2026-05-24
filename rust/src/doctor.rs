@@ -347,6 +347,7 @@ pub fn checks_to_json(checks: &[DoctorCheck]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn check_status_label_is_uppercase() {
@@ -407,12 +408,14 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn associated_domains_check_skipped_when_env_unset() {
         std::env::remove_var("APW_AASA_DOMAINS");
         assert!(check_associated_domains().is_none());
     }
 
     #[test]
+    #[serial]
     fn associated_domains_check_reports_failure_for_unreachable_host() {
         // Use a guaranteed-unreachable .invalid TLD (RFC 2606). curl will
         // exit non-zero so the probe returns None and the check fails.

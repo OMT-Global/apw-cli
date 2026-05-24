@@ -206,13 +206,9 @@ Important v2 fields:
 - `app.service.running`
 - `app.service.transport`
 - `app.service.live`
-- `session`
-- `daemon`
-- `host`
-- `bridge`
 
-The legacy daemon/host/bridge sections remain in the payload for migration and
-diagnostics, but the new primary health model is app-first.
+Legacy daemon/host/bridge diagnostics were archived for v2.1.0; current
+`status --json` reports the native app broker surface directly.
 
 ## Development and release checks
 
@@ -227,9 +223,8 @@ cargo build --manifest-path rust/Cargo.toml --release
 ./scripts/build-native-app.sh
 ```
 
-Optional parity and release helpers:
+Optional release helper:
 
 ```bash
-cargo test --manifest-path rust/Cargo.toml --test legacy_parity
 ./scripts/release-bootstrap.sh
 ```

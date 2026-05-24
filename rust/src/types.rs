@@ -345,10 +345,6 @@ impl ExternalFallbackProvider {
 pub enum RuntimeMode {
     #[default]
     Auto,
-    Native,
-    Browser,
-    Direct,
-    Launchd,
     Disabled,
 }
 
@@ -356,10 +352,6 @@ impl RuntimeMode {
     fn as_str(self) -> &'static str {
         match self {
             Self::Auto => "auto",
-            Self::Native => "native",
-            Self::Browser => "browser",
-            Self::Direct => "direct",
-            Self::Launchd => "launchd",
             Self::Disabled => "disabled",
         }
     }
@@ -381,10 +373,6 @@ impl<'de> Deserialize<'de> for RuntimeMode {
     {
         let value = String::deserialize(deserializer)?;
         Ok(match value.to_lowercase().as_str() {
-            "native" => Self::Native,
-            "browser" => Self::Browser,
-            "direct" => Self::Direct,
-            "launchd" => Self::Launchd,
             "disabled" => Self::Disabled,
             "auto" => Self::Auto,
             _ => Self::Auto,
