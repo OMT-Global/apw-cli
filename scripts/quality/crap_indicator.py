@@ -23,7 +23,9 @@ from pathlib import Path
 from typing import Iterable
 
 
-FN_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+FN_RE = re.compile(
+    r'^\s*(?:pub(?:\([^)]*\))?\s+)?(?:(?:async|const|unsafe)\s+)*(?:extern\s+"[^"]+"\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\('
+)
 COMPLEXITY_RE = re.compile(r"\b(if|match|for|while)\b|&&|\|\||=>")
 
 
@@ -156,6 +158,15 @@ def self_test() -> None:
                     "fn simple() {",
                     "    println!(\"ok\");",
                     "}",
+                    "pub(crate) const fn const_helper() -> bool {",
+                    "    true",
+                    "}",
+                    "unsafe fn unsafe_helper(value: bool) {",
+                    "    if value { println!(\"unsafe\"); }",
+                    "}",
+                    "pub extern \"C\" fn ffi_helper(value: bool) {",
+                    "    if value { println!(\"ffi\"); }",
+                    "}",
                     "fn branchy(value: bool) {",
                     "    if value && true {",
                     "        match value { true => (), false => () }",
@@ -174,19 +185,32 @@ def self_test() -> None:
                     "DA:2,1",
                     "DA:3,1",
                     "DA:4,1",
-                    "DA:5,0",
-                    "DA:6,0",
+                    "DA:5,1",
+                    "DA:6,1",
                     "DA:7,0",
-                    "DA:8,1",
+                    "DA:8,0",
+                    "DA:9,0",
+                    "DA:10,0",
+                    "DA:11,0",
+                    "DA:12,0",
+                    "DA:13,0",
+                    "DA:14,0",
+                    "DA:15,1",
+                    "DA:16,0",
+                    "DA:17,0",
+                    "DA:18,1",
                     "end_of_record",
                 ]
             ),
             encoding="utf-8",
         )
         metrics = run([source], lcov, 10)
+        names = {metric.name for metric in metrics}
+        assert {"const_helper", "unsafe_helper", "ffi_helper"}.issubset(names)
         assert metrics[0].name == "branchy"
-        assert metrics[0].complexity > metrics[1].complexity
-        assert metrics[1].coverage == 1.0
+        simple = next(metric for metric in metrics if metric.name == "simple")
+        assert metrics[0].complexity > simple.complexity
+        assert simple.coverage == 1.0
 
 
 def main() -> int:
