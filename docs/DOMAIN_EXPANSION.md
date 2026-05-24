@@ -96,10 +96,11 @@ apw app install
 ## Step 5: verify with `apw doctor`
 
 Run `apw doctor --json` after install. The `environment` array includes an
-`associated-domains` check when `supportedDomains` is configured and probes
-reachability of each AASA file. Any check that fails surfaces a remediation
-hint. CI or one-off validation can override the config with a comma-separated
-`APW_AASA_DOMAINS` value.
+`associated-domains` check when `supportedDomains` is configured. The probe
+fails domains whose AASA response redirects, is not served as
+`application/json`, or does not include `webcredentials.apps`. Any check that
+fails surfaces a remediation hint. CI or one-off validation can override the
+config with a comma-separated `APW_AASA_DOMAINS` value.
 
 ## Long-term plan
 
