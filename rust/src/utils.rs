@@ -448,6 +448,7 @@ fn normalize_legacy_config(raw: APWConfig) -> APWConfigV1 {
 }
 
 pub fn read_config_file() -> Result<APWConfigV1> {
+    let user_config_was_present = fs::symlink_metadata(config_path()).is_ok();
     let user = read_user_config_file_or_null();
     let managed = read_managed_config();
 
@@ -456,13 +457,14 @@ pub fn read_config_file() -> Result<APWConfigV1> {
             validate_external_provider_config(apply_managed_config(config, &managed_config))
         }
         (Ok(config), None) => validate_external_provider_config(config),
-        (Err(_error), Some(managed_config)) => {
+        (Err(_error), Some(managed_config)) if !user_config_was_present => {
             let base = APWConfigV1 {
                 created_at: Utc::now().to_rfc3339(),
                 ..APWConfigV1::default()
             };
             validate_external_provider_config(apply_managed_config(base, &managed_config))
         }
+        (Err(error), Some(_)) => Err(error),
         (Err(error), None) => Err(error),
     }
 }
@@ -1316,6 +1318,31 @@ mod tests {
                 vec!["example.com", "login.example.com"]
             );
             assert_eq!(runtime.disable_demo, Some(true));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn managed_preferences_do_not_mask_invalid_user_config() {
+        with_temp_home(|| {
+            let managed_provider = config_root().join("managed-provider");
+            fs::create_dir_all(config_root()).unwrap();
+            write_test_provider(&managed_provider);
+            fs::write(config_path_for_test(), "{invalid").unwrap();
+
+            env::set_var(
+                MANAGED_PREFS_TEST_PLIST_ENV,
+                managed_prefs_plist_for_test(&managed_provider),
+            );
+            let result = read_config_file();
+            env::remove_var(MANAGED_PREFS_TEST_PLIST_ENV);
+
+            assert!(result.is_err());
+            assert_eq!(
+                result.unwrap_err().code,
+                crate::types::Status::InvalidConfig
+            );
+            assert!(!config_path_for_test().exists());
         });
     }
 
