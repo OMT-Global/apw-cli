@@ -117,9 +117,10 @@ manual user-driven update checks. The broker should still report its installed
 version through `apw status --json` and `apw doctor --json` so fleet tooling can
 inventory stale installations.
 
-This managed key is part of the APW configuration contract and should be wired
-through the managed-config roadmap work before the updater runtime is enabled
-by default.
+APW.app reads this managed key at runtime and reports the current
+`updatesDisabled` state plus the configured feed URL in the `inAppUpdates`
+status payload. Sparkle startup must consult this same helper before automatic
+or manual checks are enabled.
 
 ## Security update surfacing
 

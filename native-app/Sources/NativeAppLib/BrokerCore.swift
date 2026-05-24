@@ -9,6 +9,9 @@ private let maxBrokerBytes = 32 * 1024
 private let appSocketName = "broker.sock"
 private let statusFileName = "status.json"
 private let credentialsFileName = "credentials.json"
+let appcastFeedURL = "https://github.com/OMT-Global/apw-cli/releases/latest/download/appcast.xml"
+let managedUpdatePreferenceDomain = "dev.omt.apw"
+let updatesDisabledPreferenceKey = "com.omt.apw.updatesDisabled"
 
 /// Wall-clock timeout for a single broker IPC exchange (read or write half)
 /// between the Swift app broker and the Rust CLI. The Rust client mirrors
@@ -51,6 +54,13 @@ let demoEnvVar = "APW_DEMO"
 func demoModeEnabled() -> Bool {
   ProcessInfo.processInfo.environment[demoEnvVar] == "1"
 }
+
+func managedUpdatesDisabled(
+  defaults: UserDefaults = UserDefaults(suiteName: managedUpdatePreferenceDomain) ?? .standard
+) -> Bool {
+  defaults.bool(forKey: updatesDisabledPreferenceKey)
+}
+
 protocol ApprovalPrompter {
   func prompt(url: String, username: String) -> Bool
 }
@@ -272,15 +282,19 @@ final class BrokerServer {
   private let startedAt = ISO8601DateFormatter().string(from: Date())
   private let approvalPrompter: ApprovalPrompter
   private let credentialBroker: CredentialBroker?
+  private let updatePolicyDefaults: UserDefaults
 
   init(
     paths: AppPaths,
     approvalPrompter: ApprovalPrompter = SystemApprovalPrompter(),
-    credentialBroker: CredentialBroker? = defaultCredentialBroker()
+    credentialBroker: CredentialBroker? = defaultCredentialBroker(),
+    updatePolicyDefaults: UserDefaults =
+      UserDefaults(suiteName: managedUpdatePreferenceDomain) ?? .standard
   ) {
     self.paths = paths
     self.approvalPrompter = approvalPrompter
     self.credentialBroker = credentialBroker
+    self.updatePolicyDefaults = updatePolicyDefaults
   }
 
   func run() throws -> Never {
@@ -395,6 +409,12 @@ final class BrokerServer {
       "socketPath": paths.socketPath.path,
       "supportedDomains": supportedDomains(),
       "authenticationServicesLinked": true,
+      "inAppUpdates": [
+        "feedURL": appcastFeedURL,
+        "managedPreferenceDomain": managedUpdatePreferenceDomain,
+        "managedDisableKey": updatesDisabledPreferenceKey,
+        "updatesDisabled": managedUpdatesDisabled(defaults: updatePolicyDefaults),
+      ],
     ]
   }
 

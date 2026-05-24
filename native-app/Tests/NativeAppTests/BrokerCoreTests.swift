@@ -36,13 +36,22 @@ final class BrokerCoreTests: XCTestCase {
   private func makeServer(
     root: URL,
     decision: Bool = true,
-    credentialBroker: CredentialBroker? = nil
+    credentialBroker: CredentialBroker? = nil,
+    updatePolicyDefaults: UserDefaults = .standard
   ) -> BrokerServer {
     BrokerServer(
       paths: makePaths(root),
       approvalPrompter: StubApprovalPrompter(decision: decision),
-      credentialBroker: credentialBroker
+      credentialBroker: credentialBroker,
+      updatePolicyDefaults: updatePolicyDefaults
     )
+  }
+
+  private func makeUpdatePolicyDefaults() throws -> UserDefaults {
+    let suiteName = "dev.omt.apw.tests.\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defaults.removePersistentDomain(forName: suiteName)
+    return defaults
   }
 
   private func writeCredentials(
@@ -242,6 +251,47 @@ final class BrokerCoreTests: XCTestCase {
 
     XCTAssertNotNil(guidance)
     XCTAssertFalse(guidance?.contains(where: { $0.contains("APW_NATIVE_APP_AUTO_APPROVE") }) ?? true)
+  }
+
+  func testStatusReportsManagedInAppUpdatePolicy() throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let defaults = try makeUpdatePolicyDefaults()
+    defaults.set(true, forKey: updatesDisabledPreferenceKey)
+    let server = makeServer(root: root, updatePolicyDefaults: defaults)
+
+    let response = try server.dispatch(request: RequestEnvelope(
+      requestId: "status",
+      command: "status",
+      payload: nil
+    ))
+    let updates = try XCTUnwrap(response.payload?["inAppUpdates"]?.value as? [String: Any])
+
+    XCTAssertEqual(updates["feedURL"] as? String, appcastFeedURL)
+    XCTAssertEqual(updates["managedPreferenceDomain"] as? String, managedUpdatePreferenceDomain)
+    XCTAssertEqual(updates["managedDisableKey"] as? String, updatesDisabledPreferenceKey)
+    XCTAssertEqual(updates["updatesDisabled"] as? Bool, true)
+  }
+
+  func testDoctorReportsManagedInAppUpdatePolicy() throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let defaults = try makeUpdatePolicyDefaults()
+    defaults.set(true, forKey: updatesDisabledPreferenceKey)
+    let server = makeServer(root: root, updatePolicyDefaults: defaults)
+
+    let payload = server.doctorPayload()
+    let broker = try XCTUnwrap(payload["broker"] as? [String: Any])
+    let updates = try XCTUnwrap(broker["inAppUpdates"] as? [String: Any])
+
+    XCTAssertEqual(updates["updatesDisabled"] as? Bool, true)
+    XCTAssertEqual(updates["managedDisableKey"] as? String, updatesDisabledPreferenceKey)
+  }
+
+  func testManagedUpdatesDefaultToEnabledWhenPreferenceUnset() throws {
+    let defaults = try makeUpdatePolicyDefaults()
+
+    XCTAssertEqual(managedUpdatesDisabled(defaults: defaults), false)
   }
 
   // MARK: - AuthenticationServices broker routing (issue #13)

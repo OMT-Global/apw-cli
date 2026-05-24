@@ -154,7 +154,7 @@ public protocol CredentialBroker {
         return .notHandled
       case .unknown:
         return .unknown
-      @unknown default:
+      default:
         return .unknown
       }
     }
