@@ -1763,16 +1763,8 @@ fn load_pass_credential(
             continue;
         }
         match key.as_str() {
-            "user" | "username" | "login" => {
-                if username.is_none() {
-                    username = Some(value);
-                }
-            }
-            "url" | "website" => {
-                if resolved_url.is_none() {
-                    resolved_url = Some(value);
-                }
-            }
+            "user" | "username" | "login" if username.is_none() => username = Some(value),
+            "url" | "website" if resolved_url.is_none() => resolved_url = Some(value),
             _ => {}
         }
     }
