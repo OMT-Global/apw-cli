@@ -249,7 +249,9 @@ Deliverables:
 - ship `APW.app`
 - ship `apw` CLI
 - add notarization/signing pipeline
-- move Homebrew distribution to a cask or mixed formula-plus-app install
+- Homebrew distribution decision for v2: formula-plus-app-install. The formula
+  installs `apw` and stages `APW.app`; users finish per-user setup with
+  `apw app install`. Revisit a cask after notarized `.app`/DMG assets exist.
 - add manual install path for non-Homebrew users
 
 Deliverables:
