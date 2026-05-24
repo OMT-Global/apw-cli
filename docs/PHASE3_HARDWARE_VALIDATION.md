@@ -16,6 +16,7 @@ Run this on the real validation host:
   --app /path/to/APW.app \
   --apw /path/to/apw \
   --url https://example.com \
+  --unsupported-url https://unsupported.invalid \
   --report docs/phase3-hardware-validation-report.md
 ```
 
@@ -39,19 +40,23 @@ The script fails closed unless all of these checks pass:
 - `apw login <url>` exits successfully
 - the operator confirms the native iCloud Keychain picker appeared
 - the operator confirms the selected credential was returned by APW
+- the operator records cancel, denied, and timeout observations
+- an unsupported-domain credential request fails with a domain/no-credential
+  error
 
 The operator confirmations are required because the picker is a user-mediated
 OS UI flow and the script must not scrape or save credential values.
 
 ## Error paths to record
 
-After a successful run, record the documented error paths in the generated
-report:
+During a successful run, the script requires observations for the documented
+error paths before it writes the generated report:
 
 - cancel: dismiss the credential picker and record the broker error code
 - denied: deny the APW approval prompt, when that prompt is present
 - timeout: stop or block the broker and record the CLI timeout code
 - unsupported domain: request a domain outside the app entitlement set
+  (automated by `--unsupported-url`)
 
 Do not remove the Phase 3 exit blocker in `docs/NATIVE_ONLY_REDESIGN.md` until
 the report captures success plus the required error paths on a notarized host.

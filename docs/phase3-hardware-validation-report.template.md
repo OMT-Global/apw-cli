@@ -13,6 +13,7 @@ Status: not yet validated
 - APW.app version:
 - APW CLI version:
 - Test associated domain:
+- Unsupported-domain test URL:
 - Release tag or commit:
 
 ## Automated checks
@@ -40,7 +41,7 @@ Status: not yet validated
 | Cancel | stable canceled/denied broker error | |
 | Denied | stable denied broker error | |
 | Timeout | communication timeout error | |
-| Unsupported domain | no-results or unsupported-domain error | |
+| Unsupported domain | no-results or unsupported-domain error from `--unsupported-url` | |
 
 ## Notes
 

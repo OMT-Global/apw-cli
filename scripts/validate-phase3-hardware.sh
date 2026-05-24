@@ -3,24 +3,27 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: ./scripts/validate-phase3-hardware.sh --app PATH --apw PATH --url URL [--report PATH]
+Usage: ./scripts/validate-phase3-hardware.sh --app PATH --apw PATH --url URL [--unsupported-url URL] [--report PATH]
 
 Validate the Phase 3 APW.app credential-broker flow on real macOS hardware.
 The script checks code signing, Gatekeeper, notarization stapling, associated
-domain entitlements, app install/launch/status, and a user-mediated login.
+domain entitlements, app install/launch/status, a user-mediated login, and
+the required manual error-path observations.
 
 Options:
-  --app PATH       Path to the notarized APW.app bundle.
-  --apw PATH       Path to the matching apw CLI binary.
-  --url URL        HTTPS URL for the associated-domain credential test.
-  --report PATH    Markdown report output path.
-  -h, --help       Show this help.
+  --app PATH              Path to the notarized APW.app bundle.
+  --apw PATH              Path to the matching apw CLI binary.
+  --url URL               HTTPS URL for the associated-domain credential test.
+  --unsupported-url URL   HTTPS URL outside the app entitlement set.
+  --report PATH           Markdown report output path.
+  -h, --help              Show this help.
 USAGE
 }
 
 APP_PATH=""
 APW_BIN=""
 TEST_URL=""
+UNSUPPORTED_URL="https://unsupported.invalid"
 REPORT_PATH="docs/phase3-hardware-validation-report.md"
 
 while [ "$#" -gt 0 ]; do
@@ -35,6 +38,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --url)
       TEST_URL="${2:-}"
+      shift 2
+      ;;
+    --unsupported-url)
+      UNSUPPORTED_URL="${2:-}"
       shift 2
       ;;
     --report)
@@ -101,6 +108,11 @@ case "$TEST_URL" in
   *) fail "--url must be an https URL" ;;
 esac
 
+case "$UNSUPPORTED_URL" in
+  https://*) ;;
+  *) fail "--unsupported-url must be an https URL" ;;
+esac
+
 [ -d "$APP_PATH" ] || fail "APW.app bundle not found: $APP_PATH"
 [ -x "$APP_PATH/Contents/MacOS/APW" ] || fail "APW.app executable missing or not executable"
 [ -x "$APW_BIN" ] || fail "apw CLI missing or not executable: $APW_BIN"
@@ -151,6 +163,25 @@ json_field_true "$status_json" "payload.app.installed" ||
 json_field_true "$status_json" "payload.app.service.running" ||
   fail "status JSON did not report running broker"
 
+prompt_observation() {
+  label="$1"
+  instructions="$2"
+  expected="$3"
+
+  echo >&2
+  echo "==> Manual error-path check: $label" >&2
+  echo "$instructions" >&2
+  echo "Expected result: $expected" >&2
+  printf "Observed result for %s: " "$label" >&2
+  read -r observed
+  [ -n "$observed" ] || fail "$label observation is required"
+  printf '%s' "$observed"
+}
+
+markdown_cell() {
+  printf '%s' "$1" | tr '\n' ' ' | sed 's/|/\\|/g; s/[[:space:]][[:space:]]*/ /g'
+}
+
 echo "==> Running user-mediated login request"
 echo "The next command should show the native iCloud Keychain credential picker."
 echo "Do not paste credential values into the generated report."
@@ -165,6 +196,36 @@ read -r picker_seen
 printf "Did APW return the selected test credential? [yes/no] "
 read -r credential_returned
 [ "$credential_returned" = "yes" ] || fail "operator did not confirm credential response"
+
+cancel_observed="$(prompt_observation \
+  "Cancel" \
+  "Run: $APW_BIN login $TEST_URL, then cancel the native credential picker." \
+  "stable canceled or denied broker error")"
+
+denied_observed="$(prompt_observation \
+  "Denied" \
+  "Run: $APW_BIN login $TEST_URL and deny any APW-owned approval prompt if it appears." \
+  "stable denied broker error")"
+
+timeout_observed="$(prompt_observation \
+  "Timeout" \
+  "Stop or block the broker, run: $APW_BIN login $TEST_URL, then restore the broker before continuing." \
+  "communication timeout error")"
+
+echo
+echo "==> Running unsupported-domain request"
+unsupported_output="$("$APW_BIN" login "$UNSUPPORTED_URL" 2>&1)" && {
+  echo "$unsupported_output" >&2
+  fail "unsupported-domain request unexpectedly succeeded for $UNSUPPORTED_URL"
+}
+case "$unsupported_output" in
+  *unsupported*|*notHandled*|*no_credential_source*|*No*credential*|*domain*) ;;
+  *)
+    echo "$unsupported_output" >&2
+    fail "unsupported-domain request did not emit an expected domain/no-credential error"
+    ;;
+esac
+unsupported_observed="$(markdown_cell "$unsupported_output")"
 
 mkdir -p "$(dirname "$REPORT_PATH")"
 {
@@ -183,6 +244,7 @@ mkdir -p "$(dirname "$REPORT_PATH")"
   echo "- APW.app path: $APP_PATH"
   echo "- APW CLI path: $APW_BIN"
   echo "- Test associated domain URL: $TEST_URL"
+  echo "- Unsupported-domain test URL: $UNSUPPORTED_URL"
   echo
   echo "## Automated checks"
   echo
@@ -206,10 +268,10 @@ mkdir -p "$(dirname "$REPORT_PATH")"
   echo "| Path | Expected result | Observed result |"
   echo "| --- | --- | --- |"
   echo "| Success | credential response with userMediated true | PASS |"
-  echo "| Cancel | stable canceled/denied broker error | TODO |"
-  echo "| Denied | stable denied broker error | TODO |"
-  echo "| Timeout | communication timeout error | TODO |"
-  echo "| Unsupported domain | no-results or unsupported-domain error | TODO |"
+  echo "| Cancel | stable canceled/denied broker error | $(markdown_cell "$cancel_observed") |"
+  echo "| Denied | stable denied broker error | $(markdown_cell "$denied_observed") |"
+  echo "| Timeout | communication timeout error | $(markdown_cell "$timeout_observed") |"
+  echo "| Unsupported domain | no-results or unsupported-domain error | $unsupported_observed |"
   echo
   echo "## Notes"
   echo
