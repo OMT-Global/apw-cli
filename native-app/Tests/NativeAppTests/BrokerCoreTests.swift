@@ -175,6 +175,24 @@ final class BrokerCoreTests: XCTestCase {
     XCTAssertEqual(denyResponse.error, "User denied the APW login request.")
   }
 
+  func testApprovalPromptContentLoadsLocalizedStringsAndAccessibilityLabels() throws {
+    let spanishBundle = try XCTUnwrap(nativeAppLocalizationBundle(for: "es"))
+    let content = approvalPromptContent(
+      url: "https://example.com",
+      username: "demo@example.com",
+      bundle: spanishBundle
+    )
+
+    XCTAssertEqual(content.messageText, "Autorizar inicio de sesion de APW?")
+    XCTAssertEqual(content.allowButtonTitle, "Permitir")
+    XCTAssertEqual(content.denyButtonTitle, "Denegar")
+    XCTAssertTrue(content.informativeText.contains("https://example.com"))
+    XCTAssertTrue(content.informativeText.contains("demo@example.com"))
+    XCTAssertFalse(content.windowAccessibilityLabel.isEmpty)
+    XCTAssertFalse(content.allowAccessibilityLabel.isEmpty)
+    XCTAssertFalse(content.denyAccessibilityLabel.isEmpty)
+  }
+
   func testLoginWithoutDemoEnvReturnsNoCredentialSource() throws {
     let root = URL(fileURLWithPath: NSTemporaryDirectory())
       .appendingPathComponent(UUID().uuidString, isDirectory: true)

@@ -27,6 +27,11 @@ cp "$EXECUTABLE_PATH" "$MACOS_DIR/$EXECUTABLE_NAME"
 chmod 0755 "$MACOS_DIR/$EXECUTABLE_NAME"
 cp "$PACKAGE_DIR/Resources/APW.sdef" "$RESOURCES_DIR/APW.sdef"
 
+RESOURCE_BUNDLE="$(find "$PACKAGE_DIR/.build" -path '*/release/*.bundle' -type d -name '*NativeAppLib*.bundle' | head -n 1 || true)"
+if [[ -n "$RESOURCE_BUNDLE" ]]; then
+  cp -R "$RESOURCE_BUNDLE" "$RESOURCES_DIR/$(basename "$RESOURCE_BUNDLE")"
+fi
+
 cat >"$PLIST_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

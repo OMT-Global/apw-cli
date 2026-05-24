@@ -55,16 +55,108 @@ protocol ApprovalPrompter {
   func prompt(url: String, username: String) -> Bool
 }
 
+struct ApprovalPromptContent {
+  let messageText: String
+  let informativeText: String
+  let allowButtonTitle: String
+  let denyButtonTitle: String
+  let windowAccessibilityLabel: String
+  let allowAccessibilityLabel: String
+  let denyAccessibilityLabel: String
+}
+
+func nativeAppResourceBundle() -> Bundle {
+  if let url = Bundle.main.url(forResource: "APW_NativeAppLib", withExtension: "bundle"),
+    let bundle = Bundle(url: url)
+  {
+    return bundle
+  }
+  let rootBundlePath = Bundle.main.bundleURL
+    .appendingPathComponent("APW_NativeAppLib.bundle")
+    .path
+  if let bundle = Bundle(path: rootBundlePath) {
+    return bundle
+  }
+  return .module
+}
+
+func nativeAppLocalizationBundle(
+  for locale: String,
+  baseBundle: Bundle = nativeAppResourceBundle()
+) -> Bundle? {
+  guard let path = baseBundle.path(forResource: locale, ofType: "lproj") else {
+    return nil
+  }
+  return Bundle(path: path)
+}
+
+func nativeAppLocalizedString(
+  _ key: String,
+  fallback: String,
+  bundle: Bundle = nativeAppResourceBundle()
+) -> String {
+  bundle.localizedString(forKey: key, value: fallback, table: nil)
+}
+
+func approvalPromptContent(
+  url: String,
+  username: String,
+  bundle: Bundle = nativeAppResourceBundle()
+) -> ApprovalPromptContent {
+  let informativeTemplate = nativeAppLocalizedString(
+    "approval.informativeText",
+    fallback: "Return the bootstrap credential for %@ as %@?",
+    bundle: bundle
+  )
+  return ApprovalPromptContent(
+    messageText: nativeAppLocalizedString(
+      "approval.messageText",
+      fallback: "Allow APW login?",
+      bundle: bundle
+    ),
+    informativeText: String(format: informativeTemplate, url, username),
+    allowButtonTitle: nativeAppLocalizedString(
+      "approval.allowButton",
+      fallback: "Allow",
+      bundle: bundle
+    ),
+    denyButtonTitle: nativeAppLocalizedString(
+      "approval.denyButton",
+      fallback: "Deny",
+      bundle: bundle
+    ),
+    windowAccessibilityLabel: nativeAppLocalizedString(
+      "approval.accessibility.window",
+      fallback: "APW credential approval",
+      bundle: bundle
+    ),
+    allowAccessibilityLabel: nativeAppLocalizedString(
+      "approval.accessibility.allow",
+      fallback: "Allow APW to return the selected credential",
+      bundle: bundle
+    ),
+    denyAccessibilityLabel: nativeAppLocalizedString(
+      "approval.accessibility.deny",
+      fallback: "Deny the APW credential request",
+      bundle: bundle
+    )
+  )
+}
+
 struct SystemApprovalPrompter: ApprovalPrompter {
   func prompt(url: String, username: String) -> Bool {
     _ = ASCredentialIdentityStore.shared
     NSApplication.shared.setActivationPolicy(.accessory)
+    let content = approvalPromptContent(url: url, username: username)
     let alert = NSAlert()
-    alert.messageText = "Allow APW login?"
-    alert.informativeText = "Return the bootstrap credential for \(url) as \(username)?"
+    alert.messageText = content.messageText
+    alert.informativeText = content.informativeText
     alert.alertStyle = .informational
-    alert.addButton(withTitle: "Allow")
-    alert.addButton(withTitle: "Deny")
+    alert.addButton(withTitle: content.allowButtonTitle)
+    alert.addButton(withTitle: content.denyButtonTitle)
+    alert.window.setAccessibilityLabel(content.windowAccessibilityLabel)
+    alert.buttons.first?.setAccessibilityLabel(content.allowAccessibilityLabel)
+    alert.buttons.dropFirst().first?.setAccessibilityLabel(content.denyAccessibilityLabel)
     NSApp.activate(ignoringOtherApps: true)
     return alert.runModal() == .alertFirstButtonReturn
   }
