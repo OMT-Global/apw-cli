@@ -36,3 +36,10 @@ browser-helper vault reader flow.
   `https://example.com`
 - Legacy `auth`, `pw`, `otp`, and `start` commands are no longer available in
   the active CLI. The archived parity line remains under `legacy/`.
+- Apple's public
+  AuthenticationServices path supports app-mediated password credentials for
+  sign-in and OTP AutoFill provider extensions that supply codes to the system;
+  it does not provide an APW-style API for a CLI to retrieve arbitrary
+  iCloud Keychain verification codes. See
+  [MIGRATION_AND_PARITY.md](MIGRATION_AND_PARITY.md) for the linked framework
+  references.

@@ -48,6 +48,12 @@ fn parse_json_output(value: &str) -> Value {
     serde_json::from_str(value).unwrap_or_else(|_| panic!("expected json response, got {}", value))
 }
 
+fn repo_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("rust crate should live under repo root")
+}
+
 fn write_fallback_provider_config(home: &Path, provider_path: &str) {
     let config = serde_json::json!({
         "schema": 1,
@@ -118,6 +124,45 @@ print(json.dumps({"ok": False, "code": 3, "error": "no credential"}))
     .expect("failed to write native app executable");
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))
         .expect("failed to chmod native app executable");
+}
+
+#[test]
+fn threat_model_documents_current_v2_security_boundary() {
+    let threat_model = fs::read_to_string(repo_root().join("docs/THREAT_MODEL.md"))
+        .expect("failed to read threat model");
+    let posture = fs::read_to_string(repo_root().join("docs/SECURITY_POSTURE_AND_TESTING.md"))
+        .expect("failed to read security posture doc");
+
+    for required in [
+        "AuthenticationServices",
+        "associated-domain",
+        "external fallback",
+        "UNIX socket",
+        "Retired surfaces",
+        "supported v2 credential-broker boundary",
+        "Security regression map",
+    ] {
+        assert!(
+            threat_model.contains(required),
+            "threat model should document {required}"
+        );
+    }
+
+    for retired in [
+        "UDP listener attack surface",
+        "Browser-extension trust boundary",
+        "Apple's private-helper launch path",
+    ] {
+        assert!(
+            !threat_model.contains(retired),
+            "threat model should not describe retired legacy surface `{retired}` as current"
+        );
+    }
+
+    assert!(
+        posture.contains("threat-model drift checks"),
+        "security posture should list the threat-model drift regression"
+    );
 }
 
 #[test]

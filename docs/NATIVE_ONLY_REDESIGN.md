@@ -46,8 +46,9 @@ It does not optimize for preserving every legacy CLI behavior.
 ## Non-goals
 
 - Do not preserve arbitrary vault-wide password listing.
-- Do not preserve arbitrary OTP listing or retrieval unless proven by supported
-  Apple APIs.
+- Do not preserve arbitrary OTP listing or retrieval. Issue #48 resolved the
+  no-go decision: public Apple APIs support verification-code setup and
+  AutoFill provider flows, not arbitrary CLI retrieval from iCloud Keychain.
 - Do not keep the current UDP daemon plus private-helper launch stack as the
   long-term product shape.
 - Do not claim full parity with the archived Deno project once the native-only
@@ -232,7 +233,7 @@ Deliverables:
 
 ### Phase 4: command migration and deprecation
 
-- Add compatibility warnings to `pw` and `otp`
+- Add compatibility warnings to `pw`
 - Map `pw get <domain>` to the new login flow where appropriate
 - Remove unsupported commands from primary docs
 - Preserve a migration guide for operators moving from parity APW to native-only
@@ -248,7 +249,9 @@ Deliverables:
 - ship `APW.app`
 - ship `apw` CLI
 - add notarization/signing pipeline
-- move Homebrew distribution to a cask or mixed formula-plus-app install
+- Homebrew distribution decision for v2: formula-plus-app-install. The formula
+  installs `apw` and stages `APW.app`; users finish per-user setup with
+  `apw app install`. Revisit a cask after notarized `.app`/DMG assets exist.
 - add manual install path for non-Homebrew users
 
 Deliverables:
@@ -319,7 +322,10 @@ Deliverables:
 ## Risks and open questions
 
 - Associated domains may make APW practical only for explicitly configured sites.
-- OTP parity may not survive the redesign.
+- OTP parity does not survive the redesign; `apw otp` is removed because the
+  public AuthenticationServices OTP surface is for AutoFill provider
+  extensions supplying codes to the system, not for APW retrieving iCloud
+  Keychain verification codes.
 - Homebrew-only installation may be insufficient once a signed app bundle is
   required.
 - UI mediation means APW becomes less scriptable by design.

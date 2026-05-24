@@ -69,6 +69,15 @@ After `apw app install`, the CLI copies `APW.app` into
 
 ## Homebrew
 
+APW uses a **formula-plus-app-install** Homebrew model for the v2 line. The
+formula installs the `apw` CLI and stages `APW.app` under Homebrew `libexec`;
+each user then runs `apw app install` to copy the app into that user's
+`~/.apw/native-app/installed/APW.app` runtime directory.
+
+This keeps Homebrew packaging conventional while preserving APW's per-user app
+runtime model. A separate cask is intentionally deferred until releases ship a
+notarized `.app`/DMG artifact that Homebrew can install directly.
+
 ### Local formula smoke test
 
 To validate the bundled formula from this checkout:
@@ -108,6 +117,7 @@ After installing with Homebrew, install the per-user APW app bundle:
 
 ```bash
 apw app install
+apw app launch
 ```
 
 ## APW app setup

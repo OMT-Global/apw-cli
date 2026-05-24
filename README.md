@@ -151,6 +151,10 @@ Legacy daemon commands (`apw start`, `apw auth`, `apw pw`, and `apw otp`) have
 been removed from the active CLI contract. Use `apw app launch`,
 `apw login <url>`, `apw fill <url>`, and `apw doctor` for supported v2 flows.
 
+`apw otp` has no v2 replacement and is removed from the Rust CLI. See
+[`docs/MIGRATION_AND_PARITY.md`](docs/MIGRATION_AND_PARITY.md) for the
+AuthenticationServices rationale and migration notes.
+
 ## Security and storage
 
 - APW stores legacy runtime config in `~/.apw/config.json`
