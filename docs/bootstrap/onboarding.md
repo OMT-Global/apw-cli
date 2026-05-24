@@ -56,7 +56,6 @@
     | ---------------------------- | ------------------------------------------------------------- |
     | `APPLE_DEVELOPER_CERT_P12`   | base64-encoded Developer ID Application .p12 (issue #7)        |
     | `APPLE_CERT_PASSWORD`        | passphrase for the .p12 above                                  |
-    | `APPLE_TEAM_ID`              | 10-character Apple Developer Team ID                           |
     | `APPLE_NOTARY_KEY_ID`        | App Store Connect API key id used by `notarytool`              |
     | `APPLE_NOTARY_KEY_ISSUER`    | App Store Connect issuer UUID                                  |
     | `APPLE_NOTARY_PRIVATE_KEY`   | base64-encoded `.p8` private key for `notarytool`              |
