@@ -47,10 +47,13 @@ fi
 require_line "$APPLE_SCRIPT_COMMANDS" "final class APWRequestLoginCommand: NSScriptCommand" "AppleScript login command implementation is missing."
 require_line "$APPLE_SCRIPT_COMMANDS" "final class APWRequestFillCommand: NSScriptCommand" "AppleScript fill command implementation is missing."
 require_line "$APPLE_SCRIPT_COMMANDS" "BrokerAutomation.performResponseData" "AppleScript commands must route through BrokerAutomation."
+require_line "$APPLE_SCRIPT_COMMANDS" "performOffMainThreadWhilePumpingRunLoop" "AppleScript commands must avoid blocking the main AppKit event loop."
 
 require_line "$BUILD_SCRIPT" 'cp "$PACKAGE_DIR/Resources/APW.sdef" "$RESOURCES_DIR/APW.sdef"' "APW.sdef must be copied into the app bundle."
 require_line "$BUILD_SCRIPT" "<key>NSAppleScriptEnabled</key>" "App bundle must enable AppleScript."
 require_line "$BUILD_SCRIPT" "<key>OSAScriptingDefinition</key>" "App bundle must publish the scripting definition."
+require_line "native-app/Sources/NativeAppLib/BrokerCore.swift" "runScriptableBrokerApp" "Scriptable app launches must run an AppKit event loop."
+require_line "native-app/Sources/NativeAppLib/BrokerCore.swift" "NSApplication.shared" "Scriptable app launches must initialize NSApplication."
 
 require_line "$BROKER_CORE_TESTS" "testAutomationEnvelopeMatchesBrokerRequestContract" "Automation envelope parity test is missing."
 require_line "$BROKER_CORE_TESTS" "testAutomationResponseUsesInjectedBrokerServer" "Automation broker dispatch test is missing."
