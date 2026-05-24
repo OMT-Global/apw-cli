@@ -20,9 +20,8 @@
       self.url = url
     }
 
-    @MainActor
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
-      let data = try BrokerAutomation.performResponseData(
+      let data = try await BrokerAutomation.performResponseDataAsync(
         operation: .login,
         url: url,
         requestId: "shortcuts-login"
@@ -48,9 +47,8 @@
       self.url = url
     }
 
-    @MainActor
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
-      let data = try BrokerAutomation.performResponseData(
+      let data = try await BrokerAutomation.performResponseDataAsync(
         operation: .fill,
         url: url,
         requestId: "shortcuts-fill"

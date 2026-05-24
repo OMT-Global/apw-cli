@@ -81,10 +81,7 @@ public protocol CredentialBroker {
       let semaphore = DispatchSemaphore(value: 0)
       var captured: CredentialBrokerResult = .failure(.unknown, "broker did not complete")
 
-      // ASAuthorizationController must be driven on the main thread. The
-      // broker server runs accept() on a worker thread, so we hop to
-      // main and block on a semaphore until the delegate fires.
-      DispatchQueue.main.async {
+      let startRequest = {
         let request = ASAuthorizationPasswordProvider().createRequest()
         let controller = ASAuthorizationController(authorizationRequests: [request])
 
@@ -111,9 +108,22 @@ public protocol CredentialBroker {
       // Bound the sync wait so a hung credential picker cannot hold the
       // broker forever. `brokerRequestTimeoutMs` is the same constant
       // used for IPC. (issue #2)
-      let timeout = DispatchTime.now() + .milliseconds(brokerRequestTimeoutMs)
-      if semaphore.wait(timeout: timeout) == .timedOut {
+      if Thread.isMainThread {
+        startRequest()
+        let deadline = Date().addingTimeInterval(TimeInterval(brokerRequestTimeoutMs) / 1000.0)
+        while Date() < deadline {
+          if semaphore.wait(timeout: .now()) == .success {
+            return captured
+          }
+          RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+        }
         return .failure(.failed, "AuthenticationServices request timed out.")
+      } else {
+        DispatchQueue.main.async(execute: startRequest)
+        let timeout = DispatchTime.now() + .milliseconds(brokerRequestTimeoutMs)
+        if semaphore.wait(timeout: timeout) == .timedOut {
+          return .failure(.failed, "AuthenticationServices request timed out.")
+        }
       }
       return captured
     }
