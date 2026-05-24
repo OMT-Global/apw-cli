@@ -598,7 +598,9 @@ mod tests {
         // Vendor prefix embedded inside a longer diagnostic string must be caught.
         assert!(looks_secret_like("token=ghp_abc123def456ghi789jkl0"));
         assert!(looks_secret_like("auth failed for sk-abc123"));
-        assert!(looks_secret_like("header: Authorization: Bearer AKIA1234EXAMPLE"));
+        assert!(looks_secret_like(
+            "header: Authorization: Bearer AKIA1234EXAMPLE"
+        ));
     }
 
     #[test]
