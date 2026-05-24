@@ -1,0 +1,7 @@
+"approval.messageText" = "Autorizar inicio de sesion de APW?";
+"approval.informativeText" = "Devolver la credencial bootstrap para %@ como %@?";
+"approval.allowButton" = "Permitir";
+"approval.denyButton" = "Denegar";
+"approval.accessibility.window" = "Aprobacion de credenciales de APW";
+"approval.accessibility.allow" = "Permitir que APW devuelva la credencial seleccionada";
+"approval.accessibility.deny" = "Denegar la solicitud de credenciales de APW";

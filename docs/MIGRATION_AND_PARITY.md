@@ -23,11 +23,32 @@ CLI for the `v2.1.0` cliff:
 | ------------ | ---------------------------- |
 | `apw start`  | `apw app launch`             |
 | `apw pw`     | `apw login` / `apw fill`     |
-| `apw otp`    | (no v2 replacement planned)  |
 | `apw auth`   | (no v2 replacement; v2 broker is app-mediated) |
 
 Operators with scripts pinned to these commands must migrate before upgrading to
 v2.1.0.
+
+## OTP no-go decision
+
+APW will not ship a v2 `apw otp` command. The native broker is limited to
+public Apple framework contracts:
+
+- `ASAuthorizationPasswordRequest` is the AuthenticationServices request type
+  used by `ASAuthorizationController` for password credentials:
+  <https://developer.apple.com/documentation/authenticationservices/asauthorizationpasswordrequest>
+- Apple's iCloud Keychain verification-code guidance documents setup URLs and
+  AutoFill text-field hints, not a retrieval API for third-party CLI tools:
+  <https://developer.apple.com/documentation/AuthenticationServices/securing-logins-with-icloud-keychain-verification-codes>
+- The public one-time-passcode AuthenticationServices surface is for
+  credential-provider extensions that supply OTPs to AutoFill, including
+  `ASCredentialProviderViewController` methods such as
+  `prepareOneTimeCodeCredentialList(for:)`; it is not an API for reading the
+  user's iCloud Keychain TOTP values:
+  <https://developer.apple.com/documentation/authenticationservices/providing-one-time-passcodes-to-autofill>
+
+Because APW is an app-assisted credential broker rather than a general
+iCloud Passwords vault reader, retaining `apw otp` would imply a capability
+that public Apple APIs do not support.
 
 Archive rules: [ARCHIVE_POLICY.md](ARCHIVE_POLICY.md)
 
@@ -40,7 +61,7 @@ The `v2.0.0` line intentionally changes that contract:
 
 - app-assisted credential requests replace the primary auth flow
 - vault-wide password listing is no longer a primary goal
-- OTP parity is not guaranteed
+- OTP parity is intentionally dropped
 
 The command migration matrix is tracked in
 [NATIVE_MIGRATION.md](NATIVE_MIGRATION.md).
