@@ -270,6 +270,37 @@ final class BrokerCoreTests: XCTestCase {
     XCTAssertEqual(response.ok, true)
     XCTAssertEqual(response.code, 0)
     XCTAssertEqual(response.payload?["transport"]?.value as? String, "authentication_services")
+    XCTAssertEqual(response.payload?["intent"]?.value as? String, "login")
+    XCTAssertEqual(response.payload?["username"]?.value as? String, "alice@example.com")
+    XCTAssertEqual(response.payload?["domain"]?.value as? String, "vault.example.com")
+    XCTAssertEqual(response.payload?["userMediated"]?.value as? Bool, true)
+  }
+
+  func testFillRoutesToCredentialBrokerOnSuccess() throws {
+    unsetenv("APW_DEMO")
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let broker = StubCredentialBroker(
+      outcome: .success(
+        BrokerCredential(
+          domain: "vault.example.com",
+          url: "https://vault.example.com/login",
+          username: "alice@example.com",
+          password: "real-keychain-password"
+        )))
+    let server = makeServer(root: root, credentialBroker: broker)
+
+    let response = try server.dispatch(
+      request: RequestEnvelope(
+        requestId: "fill-ok",
+        command: "fill",
+        payload: ["url": "https://vault.example.com/login"]
+      ))
+
+    XCTAssertEqual(response.ok, true)
+    XCTAssertEqual(response.code, 0)
+    XCTAssertEqual(response.payload?["transport"]?.value as? String, "authentication_services")
+    XCTAssertEqual(response.payload?["intent"]?.value as? String, "fill")
     XCTAssertEqual(response.payload?["username"]?.value as? String, "alice@example.com")
     XCTAssertEqual(response.payload?["domain"]?.value as? String, "vault.example.com")
     XCTAssertEqual(response.payload?["userMediated"]?.value as? Bool, true)

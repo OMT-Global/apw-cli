@@ -215,10 +215,11 @@ Deliverables:
   main thread and bridges results back to the worker thread via
   `DispatchSemaphore`, and a stable `BrokerErrorCode` mapping
   (`canceled` / `failed` / `invalidResponse` / `notHandled` / `unknown`).
-- `BrokerCore.loginResponse` routes through the injected broker when
-  `APW_DEMO` is unset, mapping outcomes onto the existing wire envelope
-  (`transport: "authentication_services"`, `userMediated: true`, integer
-  status codes that match the Rust `Status` enum).
+- `BrokerCore` routes both `login` and `fill` through the injected broker
+  when `APW_DEMO` is unset, mapping outcomes onto the existing wire
+  envelope (`transport: "authentication_services"`, `userMediated: true`,
+  request `intent`, and integer status codes that match the Rust `Status`
+  enum).
 - `BrokerCoreTests` exercises the broker outcome paths via
   `StubCredentialBroker` for `success` / `denied` / `canceled` /
   `invalidResponse`, and asserts the broker error code mapping.
