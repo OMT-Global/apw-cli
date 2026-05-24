@@ -29,6 +29,14 @@ The resulting binary is:
 rust/target/release/apw
 ```
 
+To build release-equivalent macOS artifacts from source, including universal
+`arm64` and `x86_64` slices for both the CLI and `APW.app`, run:
+
+```bash
+./scripts/build-universal-release.sh
+./scripts/verify-universal-binaries.sh
+```
+
 ### Install manually
 
 ```bash
@@ -53,6 +61,16 @@ Release archives are named `apw-macos-vX.Y.Z.tar.gz` and contain:
 apw
 APW.app/
 ```
+
+Release archives are built as universal macOS artifacts. Verify the architecture
+slices after extracting an archive with:
+
+```bash
+lipo -archs ./apw
+lipo -archs ./APW.app/Contents/MacOS/APW
+```
+
+Both commands must include `arm64` and `x86_64`.
 
 Extract the archive and keep `apw` beside `APW.app` while installing the
 per-user app bundle:
@@ -233,8 +251,8 @@ cargo fmt --manifest-path rust/Cargo.toml -- --check
 cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path rust/Cargo.toml --all-targets
 cargo test --manifest-path rust/Cargo.toml --test native_app_e2e
-cargo build --manifest-path rust/Cargo.toml --release
-./scripts/build-native-app.sh
+./scripts/build-universal-release.sh
+./scripts/verify-universal-binaries.sh
 ```
 
 Optional parity and release helpers:

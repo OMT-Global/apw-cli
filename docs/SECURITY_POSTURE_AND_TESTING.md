@@ -92,8 +92,8 @@ cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path rust/Cargo.toml --all-targets
 cargo test --manifest-path rust/Cargo.toml --test legacy_parity
 cargo test --manifest-path rust/Cargo.toml --test native_app_e2e
-cargo build --manifest-path rust/Cargo.toml --release
-./scripts/build-native-app.sh
+./scripts/build-universal-release.sh
+./scripts/verify-universal-binaries.sh
 ```
 
 ## Security-focused regression coverage
