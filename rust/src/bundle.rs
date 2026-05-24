@@ -291,7 +291,8 @@ where
             Ok(())
         }
         Value::Object(map) => {
-            for (_, item) in map {
+            for (key, item) in map {
+                f(key)?;
                 walk_strings(item, f)?;
             }
             Ok(())
@@ -353,7 +354,7 @@ fn looks_secret_like(value: &str) -> bool {
         "pk_live_",
     ];
     for prefix in TOKEN_PREFIXES {
-        if trimmed.starts_with(prefix) {
+        if trimmed.contains(prefix) {
             return true;
         }
     }
@@ -588,6 +589,28 @@ mod tests {
         });
         let mut count = 0;
         let err = audit_redaction(&payload, &mut count).expect_err("must abort");
+        assert_eq!(err.code, Status::InvalidConfig);
+        assert!(err.message.contains("Aborting bundle"));
+    }
+
+    #[test]
+    fn looks_secret_like_flags_embedded_vendor_prefix() {
+        // Vendor prefix embedded inside a longer diagnostic string must be caught.
+        assert!(looks_secret_like("token=ghp_abc123def456ghi789jkl0"));
+        assert!(looks_secret_like("auth failed for sk-abc123"));
+        assert!(looks_secret_like(
+            "header: Authorization: Bearer AKIA1234EXAMPLE"
+        ));
+    }
+
+    #[test]
+    fn audit_redaction_fails_closed_on_secret_like_object_key() {
+        // A secret-shaped string used as a JSON object key must be caught.
+        let payload = json!({
+            "ghp_abc123def456ghi789jkl0": "some value",
+        });
+        let mut count = 0;
+        let err = audit_redaction(&payload, &mut count).expect_err("must abort on secret key");
         assert_eq!(err.code, Status::InvalidConfig);
         assert!(err.message.contains("Aborting bundle"));
     }
