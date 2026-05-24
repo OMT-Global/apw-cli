@@ -504,6 +504,27 @@ pub fn config_provenance_details() -> Value {
     })
 }
 
+fn read_user_supported_domains_non_destructive() -> Vec<String> {
+    let Ok(content) = fs::read_to_string(config_path()) else {
+        return Vec::new();
+    };
+    let Ok(parsed) = serde_json::from_str::<Value>(&content) else {
+        return Vec::new();
+    };
+    serde_json::from_value::<APWConfigV1>(parsed)
+        .ok()
+        .filter(|config| config.schema == CONFIG_SCHEMA)
+        .map(|config| config.supported_domains)
+        .unwrap_or_default()
+}
+
+pub fn configured_supported_domains_non_destructive() -> Vec<String> {
+    if let Some(domains) = read_managed_config().and_then(|managed| managed.supported_domains) {
+        return domains;
+    }
+    read_user_supported_domains_non_destructive()
+}
+
 pub fn validate_external_provider_path(
     provider: ExternalFallbackProvider,
     provider_path: &str,
@@ -1343,6 +1364,41 @@ mod tests {
                 crate::types::Status::InvalidConfig
             );
             assert!(!config_path_for_test().exists());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn supported_domain_probe_read_preserves_invalid_user_config() {
+        with_temp_home(|| {
+            fs::create_dir_all(config_root()).unwrap();
+            fs::write(config_path_for_test(), "{invalid").unwrap();
+
+            let domains = configured_supported_domains_non_destructive();
+
+            assert!(domains.is_empty());
+            assert!(config_path_for_test().exists());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn supported_domain_probe_read_uses_managed_domains_without_clearing_user_config() {
+        with_temp_home(|| {
+            let managed_provider = config_root().join("managed-provider");
+            fs::create_dir_all(config_root()).unwrap();
+            write_test_provider(&managed_provider);
+            fs::write(config_path_for_test(), "{invalid").unwrap();
+
+            env::set_var(
+                MANAGED_PREFS_TEST_PLIST_ENV,
+                managed_prefs_plist_for_test(&managed_provider),
+            );
+            let domains = configured_supported_domains_non_destructive();
+            env::remove_var(MANAGED_PREFS_TEST_PLIST_ENV);
+
+            assert_eq!(domains, vec!["example.com", "login.example.com"]);
+            assert!(config_path_for_test().exists());
         });
     }
 
