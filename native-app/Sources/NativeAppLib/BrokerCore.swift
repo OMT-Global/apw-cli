@@ -200,7 +200,7 @@ struct ResponseEnvelope: Codable {
   let requestId: String?
 }
 
-public enum BrokerAutomationOperation: String, CaseIterable {
+public enum BrokerAutomationOperation: String, CaseIterable, Sendable {
   case login
   case fill
 }
@@ -242,6 +242,20 @@ public struct BrokerAutomation {
       requestId: requestId,
       server: server
     )
+  }
+
+  public static func performResponseDataAsync(
+    operation: BrokerAutomationOperation,
+    url: String,
+    requestId: String? = nil
+  ) async throws -> Data {
+    try await Task.detached(priority: .userInitiated) {
+      try performResponseData(
+        operation: operation,
+        url: url,
+        requestId: requestId
+      )
+    }.value
   }
 
   static func responseData(

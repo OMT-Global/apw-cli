@@ -3,6 +3,7 @@ set -euo pipefail
 
 SDEF="native-app/Resources/APW.sdef"
 APP_INTENTS="native-app/Sources/APW/APWAutomationIntents.swift"
+APPLE_SCRIPT_COMMANDS="native-app/Sources/APW/APWAppleScriptCommands.swift"
 BROKER_CORE_TESTS="native-app/Tests/NativeAppTests/BrokerCoreTests.swift"
 BUILD_SCRIPT="scripts/build-native-app.sh"
 
@@ -30,12 +31,22 @@ PY
 
 require_line "$SDEF" 'command name="request login"' "AppleScript dictionary must expose request login."
 require_line "$SDEF" 'command name="request fill"' "AppleScript dictionary must expose request fill."
+require_line "$SDEF" '<cocoa class="APWRequestLoginCommand"/>' "AppleScript login command must be wired to a Cocoa command class."
+require_line "$SDEF" '<cocoa class="APWRequestFillCommand"/>' "AppleScript fill command must be wired to a Cocoa command class."
 require_line "$SDEF" "user still approves" "AppleScript dictionary must document user mediation."
 
 require_line "$APP_INTENTS" "struct APWLoginIntent" "Shortcuts login intent is missing."
 require_line "$APP_INTENTS" "struct APWFillIntent" "Shortcuts fill intent is missing."
 require_line "$APP_INTENTS" "AppShortcutsProvider" "Shortcuts provider is missing."
-require_line "$APP_INTENTS" "BrokerAutomation.performResponseData" "Shortcuts intents must route through BrokerAutomation."
+require_line "$APP_INTENTS" "BrokerAutomation.performResponseDataAsync" "Shortcuts intents must route through asynchronous BrokerAutomation."
+if grep -Fq "@MainActor" "$APP_INTENTS"; then
+  echo "Shortcuts intents must not run broker requests synchronously on MainActor." >&2
+  exit 1
+fi
+
+require_line "$APPLE_SCRIPT_COMMANDS" "final class APWRequestLoginCommand: NSScriptCommand" "AppleScript login command implementation is missing."
+require_line "$APPLE_SCRIPT_COMMANDS" "final class APWRequestFillCommand: NSScriptCommand" "AppleScript fill command implementation is missing."
+require_line "$APPLE_SCRIPT_COMMANDS" "BrokerAutomation.performResponseData" "AppleScript commands must route through BrokerAutomation."
 
 require_line "$BUILD_SCRIPT" 'cp "$PACKAGE_DIR/Resources/APW.sdef" "$RESOURCES_DIR/APW.sdef"' "APW.sdef must be copied into the app bundle."
 require_line "$BUILD_SCRIPT" "<key>NSAppleScriptEnabled</key>" "App bundle must enable AppleScript."
