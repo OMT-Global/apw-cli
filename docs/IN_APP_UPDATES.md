@@ -88,6 +88,14 @@ appcast does not contain EdDSA signatures or does not reference the release
 archive. Private EdDSA key material stays with Sparkle's configured signing
 environment, such as Keychain-backed release automation.
 
+Tagged releases run this helper when the release runner has the
+`SPARKLE_GENERATE_APPCAST` repository variable set to Sparkle's
+`generate_appcast` executable. When configured, the release attaches
+`appcast.xml` and the signed `APW.app` update archive to the GitHub release so
+the stable `/releases/latest/download/appcast.xml` feed URL resolves to a
+signed appcast. When the variable is absent, release automation emits a warning
+and skips appcast publication rather than inventing unsigned update metadata.
+
 ## Managed update control
 
 Enterprise administrators can disable user-driven update checks with this

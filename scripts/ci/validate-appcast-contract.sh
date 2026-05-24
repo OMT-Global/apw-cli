@@ -6,6 +6,7 @@ DOC_PATH="$ROOT_DIR/docs/IN_APP_UPDATES.md"
 TEMPLATE_PATH="$ROOT_DIR/packaging/sparkle/appcast.template.xml"
 PREPARE_SCRIPT="$ROOT_DIR/scripts/prepare-sparkle-appcast.sh"
 PREPARE_TEST="$ROOT_DIR/scripts/test-prepare-sparkle-appcast.sh"
+RELEASE_WORKFLOW="$ROOT_DIR/.github/workflows/release.yml"
 FEED_URL="https://github.com/OMT-Global/apw-cli/releases/latest/download/appcast.xml"
 MDM_KEY="com.omt.apw.updatesDisabled"
 
@@ -30,6 +31,7 @@ require_file "$DOC_PATH"
 require_file "$TEMPLATE_PATH"
 require_file "$PREPARE_SCRIPT"
 require_file "$PREPARE_TEST"
+require_file "$RELEASE_WORKFLOW"
 
 require_pattern "$DOC_PATH" "Sparkle 2" "Sparkle 2 decision"
 require_pattern "$DOC_PATH" "$FEED_URL" "stable project-controlled feed URL"
@@ -44,6 +46,7 @@ require_pattern "$DOC_PATH" "xcrun stapler validate APW\\.app" "notarization sta
 require_pattern "$DOC_PATH" "sparkle:criticalUpdate" "security update appcast marker"
 require_pattern "$DOC_PATH" "prepare-sparkle-appcast\\.sh" "release appcast preparation helper"
 require_pattern "$DOC_PATH" "generate_appcast" "Sparkle appcast generation tool"
+require_pattern "$DOC_PATH" "SPARKLE_GENERATE_APPCAST" "release runner generate_appcast configuration"
 
 require_pattern "$TEMPLATE_PATH" "xmlns:sparkle=\"http://www\\.andymatuschak\\.org/xml-namespaces/sparkle\"" "Sparkle namespace"
 require_pattern "$TEMPLATE_PATH" "<title>APW [0-9]+\\.[0-9]+\\.[0-9]+ Security Update</title>" "security update title"
@@ -58,6 +61,10 @@ require_pattern "$PREPARE_SCRIPT" "generate_appcast" "Sparkle appcast generation
 require_pattern "$PREPARE_SCRIPT" "sparkle:edSignature=" "signed appcast output enforcement"
 require_pattern "$PREPARE_SCRIPT" "Do not pass private keys" "private key handling guardrail"
 require_pattern "$PREPARE_TEST" "Sparkle appcast preparation test passed" "helper regression test"
+require_pattern "$RELEASE_WORKFLOW" "prepare-sparkle-appcast\\.sh" "release appcast preparation step"
+require_pattern "$RELEASE_WORKFLOW" "SPARKLE_GENERATE_APPCAST" "release appcast generator variable"
+require_pattern "$RELEASE_WORKFLOW" "dist/appcast\\.xml" "release appcast asset upload"
+require_pattern "$RELEASE_WORKFLOW" "APW\\.app-\\$\\{\\{ github\\.ref_name \\}\\}\\.zip" "release Sparkle app archive upload"
 
 if command -v xmllint >/dev/null 2>&1; then
   xmllint --noout "$TEMPLATE_PATH"

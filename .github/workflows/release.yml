@@ -142,6 +142,36 @@ jobs:
       - name: Package release archive
         run: ./scripts/package-release-archive.sh "${GITHUB_REF_NAME}"
 
+      - name: Prepare signed Sparkle appcast
+        id: sparkle_appcast
+        env:
+          SPARKLE_GENERATE_APPCAST: ${{ vars.SPARKLE_GENERATE_APPCAST || '' }}
+        run: |
+          if [ -z "$SPARKLE_GENERATE_APPCAST" ]; then
+            echo "::warning::SPARKLE_GENERATE_APPCAST is not configured; skipping Sparkle appcast publication."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          app_zip="dist/APW.app-${GITHUB_REF_NAME}.zip"
+          release_notes="dist/APW.app-${GITHUB_REF_NAME}.md"
+
+          ditto -c -k --keepParent native-app/dist/APW.app "$app_zip"
+          {
+            echo "# APW ${GITHUB_REF_NAME}"
+            echo
+            echo "See the GitHub release notes for this tag."
+          } > "$release_notes"
+
+          ./scripts/prepare-sparkle-appcast.sh \
+            --archive "$app_zip" \
+            --release-notes "$release_notes" \
+            --updates-dir dist/sparkle-updates \
+            --generate-appcast "$SPARKLE_GENERATE_APPCAST"
+
+          cp dist/sparkle-updates/appcast.xml dist/appcast.xml
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
       - name: Validate release archive contents
         run: |
           archive="dist/apw-macos-${GITHUB_REF_NAME}.tar.gz"
@@ -154,6 +184,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/apw-macos-${{ github.ref_name }}.tar.gz
+
+      - name: Publish Sparkle appcast assets
+        if: steps.sparkle_appcast.outputs.available == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/APW.app-${{ github.ref_name }}.zip
+            dist/appcast.xml
 
   publish-homebrew-tap:
     name: Publish Homebrew tap PR
