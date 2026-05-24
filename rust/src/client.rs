@@ -499,6 +499,7 @@ impl APWMessages {
         })
     }
 
+    #[cfg(test)]
     pub fn get_otp_for_url(session: &SRPSession, url: &str) -> Result<Message> {
         let encrypted = session.encrypt(&json!({
           "ACT": Action::Search,
@@ -532,6 +533,7 @@ impl APWMessages {
         })
     }
 
+    #[cfg(test)]
     pub fn list_otp_for_url(session: &SRPSession, url: &str) -> Result<Message> {
         let encrypted = session.encrypt(&json!({
           "ACT": Action::GhostSearch,
@@ -999,6 +1001,7 @@ impl ApplePasswordManager {
         })
     }
 
+    #[cfg(test)]
     pub fn get_otp_for_url(&mut self, url: &str) -> Result<Payload> {
         self.ensure_authenticated(None)?;
         let normalized = normalize_lookup_url(url);
@@ -1013,6 +1016,7 @@ impl ApplePasswordManager {
         })
     }
 
+    #[cfg(test)]
     pub fn list_otp_for_url(&mut self, url: &str) -> Result<Payload> {
         self.ensure_authenticated(None)?;
         let normalized = normalize_lookup_url(url);
