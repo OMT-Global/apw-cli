@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::future::Future;
-use std::io::ErrorKind;
+use std::io::{Error as IoError, ErrorKind, Result as IoResult};
 #[cfg(target_os = "macos")]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
@@ -1870,12 +1870,14 @@ async fn start_browser_daemon_inner(options: DaemonOptions, host: String) -> Res
 
 async fn read_native_host_frame(stream: &mut UnixStream) -> Result<Vec<u8>> {
     let mut length = [0_u8; 4];
-    stream.read_exact(&mut length).await.map_err(|error| {
-        APWError::new(
-            Status::ProcessNotRunning,
-            format!("Failed reading native host frame header: {error}"),
-        )
-    })?;
+    read_native_host_exact(stream, &mut length)
+        .await
+        .map_err(|error| {
+            APWError::new(
+                Status::ProcessNotRunning,
+                format!("Failed reading native host frame header: {error}"),
+            )
+        })?;
     let payload_length = u32::from_le_bytes(length) as usize;
     if payload_length == 0 || payload_length > MAX_HELPER_PAYLOAD {
         return Err(APWError::new(
@@ -1885,13 +1887,35 @@ async fn read_native_host_frame(stream: &mut UnixStream) -> Result<Vec<u8>> {
     }
 
     let mut payload = vec![0_u8; payload_length];
-    stream.read_exact(&mut payload).await.map_err(|error| {
-        APWError::new(
-            Status::ProcessNotRunning,
-            format!("Failed reading native host frame: {error}"),
-        )
-    })?;
+    read_native_host_exact(stream, &mut payload)
+        .await
+        .map_err(|error| {
+            APWError::new(
+                Status::ProcessNotRunning,
+                format!("Failed reading native host frame: {error}"),
+            )
+        })?;
     Ok(payload)
+}
+
+async fn read_native_host_exact(stream: &mut UnixStream, mut buffer: &mut [u8]) -> IoResult<()> {
+    while !buffer.is_empty() {
+        match stream.read(buffer).await {
+            Ok(0) => {
+                return Err(IoError::new(
+                    ErrorKind::UnexpectedEof,
+                    "native host stream closed",
+                ));
+            }
+            Ok(bytes_read) => {
+                let (_, remaining) = buffer.split_at_mut(bytes_read);
+                buffer = remaining;
+            }
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 async fn write_native_host_frame(stream: &mut UnixStream, payload: &[u8]) -> Result<()> {
