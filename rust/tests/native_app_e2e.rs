@@ -855,6 +855,40 @@ fn doctor_bundle_writes_deterministic_redacted_archive() {
 
 #[test]
 #[serial]
+fn doctor_ci_and_bundle_fail_before_writing_archive() {
+    // Issue #56 review follow-up: the operator-facing CLI must not accept
+    // `--ci --bundle` and then return before writing the requested archive.
+    let fixture = NativeAppFixture::new();
+    let bundle_dir = TempDir::new().expect("failed to create bundle output dir");
+    let bundle_path = bundle_dir.path().join("should-not-exist.tar.gz");
+
+    let output = run_apw(
+        &fixture,
+        &[
+            "--json",
+            "doctor",
+            "--ci",
+            "--bundle",
+            bundle_path.to_str().unwrap(),
+        ],
+        &[],
+    );
+
+    assert_ne!(output.status, 0, "expected clap conflict, got {output:#?}");
+    assert!(
+        output.stderr.contains("cannot be used with")
+            || output.stderr.contains("cannot be used at the same time"),
+        "expected conflict error, got: {}",
+        output.stderr
+    );
+    assert!(
+        !bundle_path.exists(),
+        "bundle file must not exist when --ci conflicts with --bundle"
+    );
+}
+
+#[test]
+#[serial]
 fn direct_fallback_bounds_oversized_stdout() {
     // Issue #42: a fallback executable that streams unbounded output must
     // be capped before the CLI buffers the full payload. Previously the
