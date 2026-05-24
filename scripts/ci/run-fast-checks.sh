@@ -21,6 +21,11 @@ if [ ! -x scripts/render-homebrew-formula.sh ]; then
   exit 1
 fi
 
+if grep -Eq '^[[:space:]]+security:[[:space:]]+true[[:space:]]*$' project.bootstrap.yaml && [ ! -f SECURITY.md ]; then
+  echo "project.bootstrap.yaml enables docs.security but SECURITY.md is missing." >&2
+  exit 1
+fi
+
 chmod +x ./.github/scripts/verify-version-sync.sh
 ./.github/scripts/verify-version-sync.sh \
   rust/Cargo.toml \
