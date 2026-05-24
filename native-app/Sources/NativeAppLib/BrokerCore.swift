@@ -754,6 +754,38 @@ final class BrokerServer {
   }
 }
 
+private final class BrokerApplicationDelegate: NSObject, NSApplicationDelegate {
+  private let server: BrokerServer
+
+  init(server: BrokerServer) {
+    self.server = server
+  }
+
+  func applicationDidFinishLaunching(_ notification: Notification) {
+    Thread.detachNewThread { [server] in
+      do {
+        try server.run()
+      } catch {
+        fputs("APW app failed: \(error)\n", stderr)
+        DispatchQueue.main.async {
+          NSApplication.shared.terminate(nil)
+        }
+      }
+    }
+  }
+}
+
+private var brokerApplicationDelegate: BrokerApplicationDelegate?
+
+private func runScriptableBrokerApp(server: BrokerServer) -> Never {
+  let application = NSApplication.shared
+  application.setActivationPolicy(.accessory)
+  brokerApplicationDelegate = BrokerApplicationDelegate(server: server)
+  application.delegate = brokerApplicationDelegate
+  application.run()
+  exit(0)
+}
+
 func bundleVersion() -> String {
   if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
     as? String,
@@ -772,6 +804,9 @@ public func runBrokerAppMain() -> Never {
   do {
     switch command {
     case "serve":
+      if Bundle.main.object(forInfoDictionaryKey: "NSAppleScriptEnabled") as? Bool == true {
+        runScriptableBrokerApp(server: server)
+      }
       try server.run()
     case "doctor":
       let payload = server.doctorPayload()
