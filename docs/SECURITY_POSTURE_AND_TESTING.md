@@ -62,7 +62,13 @@ cargo test --manifest-path rust/Cargo.toml --test legacy_parity
 cargo test --manifest-path rust/Cargo.toml --test native_app_e2e
 cargo build --manifest-path rust/Cargo.toml --release
 ./scripts/build-native-app.sh
+./scripts/ci/validate-appcast-contract.sh
 ```
+
+In-app updates must follow the signed Sparkle appcast contract in
+[IN_APP_UPDATES.md](IN_APP_UPDATES.md). Release automation must not publish an
+appcast until the APW.app archive passes code-signing, Gatekeeper, and
+notarization staple validation.
 
 ## Security-focused regression coverage
 
@@ -77,6 +83,7 @@ The Rust test suite covers:
 - native app diagnostics and `APW_DEMO=1` bootstrap credential file initialization
 - end-to-end v2 app install, launch, status, doctor, and login flows
 - direct-exec fallback, unsupported-domain handling, denial handling, and malformed broker response mapping
+- signed appcast contract requirements for the future APW.app in-app update channel
 
 ## Archive policy
 

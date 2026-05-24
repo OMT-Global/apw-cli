@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>APW.app Updates</title>
+    <link>https://github.com/OMT-Global/apw-cli/releases</link>
+    <description>Signed APW.app update feed.</description>
+    <language>en</language>
+    <item>
+      <title>APW 2.0.0 Security Update</title>
+      <link>https://github.com/OMT-Global/apw-cli/releases/tag/v2.0.0</link>
+      <sparkle:version>2.0.0</sparkle:version>
+      <sparkle:shortVersionString>2.0.0</sparkle:shortVersionString>
+      <sparkle:releaseNotesLink sparkle:edSignature="REPLACE_WITH_RELEASE_NOTES_ED25519_SIGNATURE" sparkle:length="1234">https://github.com/OMT-Global/apw-cli/releases/tag/v2.0.0</sparkle:releaseNotesLink>
+      <pubDate>Tue, 01 Jan 2030 00:00:00 +0000</pubDate>
+      <sparkle:criticalUpdate sparkle:version="1.9.9"></sparkle:criticalUpdate>
+      <enclosure
+        url="https://github.com/OMT-Global/apw-cli/releases/download/v2.0.0/APW.app.zip"
+        sparkle:edSignature="REPLACE_WITH_ARCHIVE_ED25519_SIGNATURE"
+        length="12345678"
+        type="application/octet-stream" />
+    </item>
+  </channel>
+</rss>
