@@ -25,7 +25,8 @@ APW_RUN_MUTATION=1 bash scripts/ci/run-quality-indicators.sh
 ```
 
 The script writes mutation output under `rust/target/mutants` and keeps it out
-of source control.
+of source control. When `APW_RUN_MUTATION=1` is set, missing `cargo-mutants`
+is a hard failure rather than a silent skip.
 
 ## CRAP indicator
 
@@ -50,4 +51,16 @@ APW_RUN_COVERAGE=1 bash scripts/ci/run-quality-indicators.sh
 
 Without LCOV coverage input, the script assumes 0% coverage and produces a
 conservative hotspot list. That mode is useful for deciding where to add tests
-before enabling coverage tooling on a runner.
+before enabling coverage tooling on a runner. When `APW_RUN_COVERAGE=1` is
+set, missing `cargo-llvm-cov` is a hard failure rather than a silent skip.
+
+## Tooling regression tests
+
+Fast checks run:
+
+```bash
+./scripts/test-quality-indicators.sh
+```
+
+This covers the CRAP self-test and verifies that explicitly requested mutation
+or coverage runs fail closed when their required tools are unavailable.
