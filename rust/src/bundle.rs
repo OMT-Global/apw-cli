@@ -596,7 +596,10 @@ mod tests {
     #[test]
     fn looks_secret_like_flags_embedded_vendor_prefix() {
         // Vendor prefix embedded inside a longer diagnostic string must be caught.
-        assert!(looks_secret_like("token=ghp_abc123def456ghi789jkl0"));
+        let github_prefix = ["gh", "p_"].concat();
+        assert!(looks_secret_like(&format!(
+            "token={github_prefix}abc123def456ghi789jkl0"
+        )));
         assert!(looks_secret_like("auth failed for sk-abc123"));
         assert!(looks_secret_like(
             "header: Authorization: Bearer AKIA1234EXAMPLE"
@@ -606,8 +609,9 @@ mod tests {
     #[test]
     fn audit_redaction_fails_closed_on_secret_like_object_key() {
         // A secret-shaped string used as a JSON object key must be caught.
+        let github_prefix = ["gh", "p_"].concat();
         let payload = json!({
-            "ghp_abc123def456ghi789jkl0": "some value",
+            format!("{github_prefix}abc123def456ghi789jkl0"): "some value",
         });
         let mut count = 0;
         let err = audit_redaction(&payload, &mut count).expect_err("must abort on secret key");
