@@ -290,7 +290,8 @@ final class BrokerCoreTests: XCTestCase {
     XCTAssertEqual(response.payload?["userMediated"]?.value as? Bool, true)
   }
 
-  func testFillRoutesToCredentialBrokerOnSuccess() throws {
+
+  func testFillRoutesThroughSameBrokerEnvelopeOnSuccess() throws {
     unsetenv("APW_DEMO")
     let root = URL(fileURLWithPath: NSTemporaryDirectory())
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -346,6 +347,59 @@ final class BrokerCoreTests: XCTestCase {
     XCTAssertEqual(response.ok, true)
     XCTAssertEqual(response.payload?["transport"]?.value as? String, "authentication_services")
     XCTAssertEqual(broker.requestedURLs, ["https://vault.example.com"])
+  }
+
+  func testAutomationEnvelopeMatchesBrokerRequestContract() throws {
+    let data = try BrokerAutomation.requestEnvelopeData(
+      operation: .fill,
+      url: "https://vault.example.com",
+      requestId: "automation-fill"
+    )
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    let payload = json?["payload"] as? [String: String]
+
+    XCTAssertEqual(json?["requestId"] as? String, "automation-fill")
+    XCTAssertEqual(json?["command"] as? String, "fill")
+    XCTAssertEqual(payload?["url"], "https://vault.example.com")
+    XCTAssertEqual(payload?["intent"], "fill")
+    XCTAssertEqual(payload?["automation"], "true")
+  }
+
+  func testAutomationResponseUsesInjectedBrokerServer() throws {
+    unsetenv("APW_DEMO")
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let broker = StubCredentialBroker(
+      outcome: .success(
+        BrokerCredential(
+          domain: "vault.example.com",
+          url: "https://vault.example.com",
+          username: "alice@example.com",
+          password: "real-keychain-password"
+        )))
+    let server = makeServer(root: root, credentialBroker: broker)
+
+    let data = try BrokerAutomation.responseData(
+      operation: .login,
+      url: "https://vault.example.com",
+      requestId: "automation-login",
+      server: server
+    )
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    let payload = json?["payload"] as? [String: Any]
+
+    XCTAssertEqual(json?["ok"] as? Bool, true)
+    XCTAssertEqual(json?["requestId"] as? String, "automation-login")
+    XCTAssertEqual(payload?["intent"] as? String, "login")
+    XCTAssertEqual(payload?["transport"] as? String, "authentication_services")
+  }
+
+  func testAutomationRejectsNonHTTPSURLsBeforeBrokerDispatch() {
+    XCTAssertThrowsError(try BrokerAutomation.requestEnvelopeData(
+      operation: .login,
+      url: "http://vault.example.com",
+      requestId: "bad"
+    ))
   }
 
   func testLoginRoutesToCredentialBrokerOnDeny() throws {
