@@ -97,8 +97,18 @@ cp "$RELEASE_NOTES_PATH" "$UPDATES_DIR/$archive_name.md"
 appcast_path="$UPDATES_DIR/$feed_file"
 [ -f "$appcast_path" ] || fail "generate_appcast did not create $appcast_path"
 
-if ! grep -q 'sparkle:edSignature=' "$appcast_path"; then
-  fail "$appcast_path does not contain Sparkle EdDSA signatures"
+if ! grep -Eq '<enclosure [^>]*sparkle:edSignature=' "$appcast_path"; then
+  fail "$appcast_path does not contain a signed Sparkle update enclosure"
+fi
+
+if grep -q 'sparkle:releaseNotesLink' "$appcast_path" &&
+  ! grep -Eq 'sparkle:releaseNotesLink[^>]*sparkle:edSignature=' "$appcast_path"; then
+  fail "$appcast_path contains unsigned Sparkle release notes"
+fi
+
+if grep -q '<sparkle:criticalUpdate' "$appcast_path" &&
+  ! grep -Eq '^##[[:space:]]+Security([[:space:]]|$)' "$RELEASE_NOTES_PATH"; then
+  fail "critical Sparkle updates require a Security section in release notes"
 fi
 
 if ! grep -q "$archive_name" "$appcast_path"; then
