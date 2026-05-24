@@ -106,18 +106,21 @@ shasum -a 256 -c apw-macos-vX.Y.Z.dmg.sha256
 Open the DMG and install the app bundle:
 
 ```bash
+MOUNT="/Volumes/APW vX.Y.Z"
 hdiutil attach apw-macos-vX.Y.Z.dmg
-cp -R "/Volumes/APW vX.Y.Z/APW.app" /Applications/APW.app
-install -m 0755 "/Volumes/APW vX.Y.Z/bin/apw" /usr/local/bin/apw
-hdiutil detach "/Volumes/APW vX.Y.Z"
+install -m 0755 "$MOUNT/bin/apw" /usr/local/bin/apw
+(cd "$MOUNT" && ./bin/apw app install)
+cp -R "$MOUNT/APW.app" /Applications/APW.app
+hdiutil detach "$MOUNT"
 ```
 
-Then run the first-use setup:
+Keep the DMG mounted until `apw app install` completes; the installer discovers
+`APW.app` from the mounted volume before copying it into the per-user runtime
+directory. Then run the first-use launch check:
 
 ```bash
 apw --version
 apw status --json
-apw app install
 apw app launch
 ```
 
