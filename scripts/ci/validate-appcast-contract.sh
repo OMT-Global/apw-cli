@@ -69,9 +69,32 @@ require_pattern "$TEMPLATE_PATH" "<title>APW [0-9]+\\.[0-9]+\\.[0-9]+ Security U
 require_pattern "$TEMPLATE_PATH" "<sparkle:version>[0-9]+\\.[0-9]+\\.[0-9]+</sparkle:version>" "machine version"
 require_pattern "$TEMPLATE_PATH" "sparkle:releaseNotesLink sparkle:edSignature=" "signed release notes link"
 require_pattern "$TEMPLATE_PATH" "<sparkle:criticalUpdate" "critical update marker"
-require_pattern "$TEMPLATE_PATH" "url=\"https://github\\.com/OMT-Global/apw-cli/releases/download/v[0-9]+\\.[0-9]+\\.[0-9]+/APW\\.app\\.zip\"" "release archive URL"
-require_pattern "$TEMPLATE_PATH" "sparkle:edSignature=" "signed archive enclosure"
-require_pattern "$TEMPLATE_PATH" "length=\"[0-9]+\"" "archive length"
+python3 - "$TEMPLATE_PATH" <<'PY'
+import re
+import sys
+import xml.etree.ElementTree as ET
+
+sparkle = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
+template = sys.argv[1]
+root = ET.parse(template).getroot()
+enclosure = root.find("./channel/item/enclosure")
+if enclosure is None:
+    raise SystemExit(f"Missing appcast contract requirement in {template}: archive enclosure")
+
+url = enclosure.get("url", "")
+if not re.fullmatch(
+    r"https://github\.com/OMT-Global/apw-cli/releases/download/v[0-9]+\.[0-9]+\.[0-9]+/APW\.app\.zip",
+    url,
+):
+    raise SystemExit(f"Missing appcast contract requirement in {template}: release archive URL")
+
+if not enclosure.get(f"{sparkle}edSignature"):
+    raise SystemExit(f"Missing appcast contract requirement in {template}: signed archive enclosure")
+
+length = enclosure.get("length", "")
+if not re.fullmatch(r"[0-9]+", length):
+    raise SystemExit(f"Missing appcast contract requirement in {template}: archive length")
+PY
 
 require_pattern "$PREPARE_SCRIPT" "generate_appcast" "Sparkle appcast generation invocation"
 require_pattern "$PREPARE_SCRIPT" "sparkle:edSignature=" "signed appcast output enforcement"
