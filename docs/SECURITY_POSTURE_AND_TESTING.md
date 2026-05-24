@@ -77,6 +77,18 @@ The Rust test suite covers:
 - native app diagnostics and `APW_DEMO=1` bootstrap credential file initialization
 - end-to-end v2 app install, launch, status, doctor, and login flows
 - direct-exec fallback, unsupported-domain handling, denial handling, and malformed broker response mapping
+- external fallback provider path hardening, including relative paths, `~`, world-writable
+  executables, and symlink targets
+- diagnostic-bundle redaction and fail-closed aborts when staged diagnostics look
+  credential-like
+- threat-model drift checks so retired UDP/browser-helper/private-helper
+  surfaces do not re-enter the supported v2 broker boundary without an explicit
+  documentation update
+
+The threat matrix and residual-risk owners are tracked in
+[THREAT_MODEL.md](THREAT_MODEL.md). When a new credential surface is added,
+update that matrix and add a focused regression in the Rust or Swift suite that
+proves the documented mitigation.
 
 The native app Swift test suite covers:
 
