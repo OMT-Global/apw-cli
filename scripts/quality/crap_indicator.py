@@ -97,6 +97,27 @@ def has_closed_function_body(seen_body: bool, depth: int) -> bool:
     return seen_body and depth <= 0
 
 
+def read_function_body(lines: list[str], start_index: int) -> tuple[list[str], int, bool]:
+    body_lines: list[str] = []
+    depth = 0
+    seen_body = False
+    index = start_index
+    while index < len(lines):
+        line = lines[index]
+        body_lines.append(line)
+        if ends_bodyless_function_declaration(line, seen_body):
+            return body_lines, index, False
+
+        depth += line.count("{")
+        if "{" in line:
+            seen_body = True
+        depth -= line.count("}")
+        if has_closed_function_body(seen_body, depth):
+            return body_lines, index, True
+        index += 1
+    return body_lines, index - 1, False
+
+
 def parse_functions(path: Path, coverage: dict[Path, dict[int, int]]) -> list[FunctionMetric]:
     lines = path.read_text(encoding="utf-8").splitlines()
     metrics: list[FunctionMetric] = []
@@ -108,26 +129,9 @@ def parse_functions(path: Path, coverage: dict[Path, dict[int, int]]) -> list[Fu
             continue
         name = match.group(1)
         start_index = index
-        body_lines: list[str] = []
-        depth = 0
-        seen_body = False
-        is_declaration = False
-        while index < len(lines):
-            line = lines[index]
-            body_lines.append(line)
-            if ends_bodyless_function_declaration(line, seen_body):
-                is_declaration = True
-                break
-            depth += line.count("{")
-            if "{" in line:
-                seen_body = True
-            depth -= line.count("}")
-            if has_closed_function_body(seen_body, depth):
-                break
-            index += 1
-        end_index = index
-        if is_declaration or not seen_body:
-            index += 1
+        body_lines, end_index, has_body = read_function_body(lines, start_index)
+        if not has_body:
+            index = end_index + 1
             continue
         metrics.append(
             FunctionMetric(
@@ -139,7 +143,7 @@ def parse_functions(path: Path, coverage: dict[Path, dict[int, int]]) -> list[Fu
                 coverage=function_coverage(path, start_index + 1, end_index + 1, coverage),
             )
         )
-        index += 1
+        index = end_index + 1
     return metrics
 
 
