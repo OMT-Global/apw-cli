@@ -53,6 +53,9 @@ Without LCOV coverage input, the script assumes 0% coverage and produces a
 conservative hotspot list. That mode is useful for deciding where to add tests
 before enabling coverage tooling on a runner. When `APW_RUN_COVERAGE=1` is
 set, missing `cargo-llvm-cov` is a hard failure rather than a silent skip.
+The source scanner recognizes ordinary Rust functions plus qualified forms such
+as `async fn`, `const fn`, `unsafe fn`, and `extern "C" fn`, including
+visibility-qualified declarations.
 
 ## Tooling regression tests
 
