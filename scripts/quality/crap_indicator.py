@@ -93,6 +93,10 @@ def ends_bodyless_function_declaration(line: str, seen_body: bool) -> bool:
     return not seen_body and "{" not in line and ";" in line
 
 
+def has_closed_function_body(seen_body: bool, depth: int) -> bool:
+    return seen_body and depth <= 0
+
+
 def parse_functions(path: Path, coverage: dict[Path, dict[int, int]]) -> list[FunctionMetric]:
     lines = path.read_text(encoding="utf-8").splitlines()
     metrics: list[FunctionMetric] = []
@@ -118,7 +122,7 @@ def parse_functions(path: Path, coverage: dict[Path, dict[int, int]]) -> list[Fu
             if "{" in line:
                 seen_body = True
             depth -= line.count("}")
-            if seen_body and depth <= 0:
+            if has_closed_function_body(seen_body, depth):
                 break
             index += 1
         end_index = index
