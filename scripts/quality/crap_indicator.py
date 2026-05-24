@@ -89,6 +89,10 @@ def count_complexity(lines: list[str]) -> int:
     return complexity
 
 
+def ends_bodyless_function_declaration(line: str, seen_body: bool) -> bool:
+    return not seen_body and "{" not in line and ";" in line
+
+
 def parse_functions(path: Path, coverage: dict[Path, dict[int, int]]) -> list[FunctionMetric]:
     lines = path.read_text(encoding="utf-8").splitlines()
     metrics: list[FunctionMetric] = []
@@ -107,7 +111,7 @@ def parse_functions(path: Path, coverage: dict[Path, dict[int, int]]) -> list[Fu
         while index < len(lines):
             line = lines[index]
             body_lines.append(line)
-            if not seen_body and "{" not in line and ";" in line:
+            if ends_bodyless_function_declaration(line, seen_body):
                 is_declaration = True
                 break
             depth += line.count("{")
@@ -179,6 +183,10 @@ def self_test() -> None:
                     "    fn multiline(",
                     "        &self,",
                     "    ) -> bool;",
+                    "    fn generic<T>(",
+                    "        &self,",
+                    "        value: T,",
+                    "    ) -> Result<(), String>;",
                     "}",
                     "fn after_trait() {",
                     "    println!(\"after\");",
@@ -225,6 +233,7 @@ def self_test() -> None:
         assert {"const_helper", "unsafe_helper", "ffi_helper"}.issubset(names)
         assert "strategy" not in names
         assert "multiline" not in names
+        assert "generic" not in names
         assert "after_trait" in names
         assert metrics[0].name == "branchy"
         simple = next(metric for metric in metrics if metric.name == "simple")
