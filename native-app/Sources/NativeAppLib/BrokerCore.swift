@@ -108,6 +108,91 @@ struct ResponseEnvelope: Codable {
   let requestId: String?
 }
 
+public enum BrokerAutomationOperation: String, CaseIterable {
+  case login
+  case fill
+}
+
+public enum BrokerAutomationError: Error, CustomStringConvertible {
+  case invalidURL(String)
+
+  public var description: String {
+    switch self {
+    case .invalidURL(let value):
+      return "Invalid APW automation URL: \(value)"
+    }
+  }
+}
+
+public struct BrokerAutomation {
+  public static func requestEnvelopeData(
+    operation: BrokerAutomationOperation,
+    url: String,
+    requestId: String? = nil
+  ) throws -> Data {
+    try validateURL(url)
+    return try JSONEncoder().encode(requestEnvelope(
+      operation: operation,
+      url: url,
+      requestId: requestId
+    ))
+  }
+
+  public static func performResponseData(
+    operation: BrokerAutomationOperation,
+    url: String,
+    requestId: String? = nil
+  ) throws -> Data {
+    let server = BrokerServer(paths: AppPaths.resolve())
+    return try responseData(
+      operation: operation,
+      url: url,
+      requestId: requestId,
+      server: server
+    )
+  }
+
+  static func responseData(
+    operation: BrokerAutomationOperation,
+    url: String,
+    requestId: String? = nil,
+    server: BrokerServer
+  ) throws -> Data {
+    let response = try server.dispatch(request: requestEnvelope(
+      operation: operation,
+      url: url,
+      requestId: requestId
+    ))
+    return try JSONEncoder().encode(response)
+  }
+
+  private static func requestEnvelope(
+    operation: BrokerAutomationOperation,
+    url: String,
+    requestId: String?
+  ) throws -> RequestEnvelope {
+    try validateURL(url)
+    return RequestEnvelope(
+      requestId: requestId,
+      command: operation.rawValue,
+      payload: [
+        "url": url,
+        "intent": operation.rawValue,
+        "automation": "true",
+      ]
+    )
+  }
+
+  private static func validateURL(_ rawURL: String) throws {
+    guard let parsed = URL(string: rawURL),
+      parsed.scheme == "https",
+      parsed.host?.isEmpty == false
+    else {
+      throw BrokerAutomationError.invalidURL(rawURL)
+    }
+  }
+}
+
 struct AppPaths {
   let runtimeRoot: URL
   let socketPath: URL
@@ -280,9 +365,14 @@ final class BrokerServer {
         error: nil,
         requestId: request.requestId
       )
-    case "login":
+    case "login", "fill":
       let url = request.payload?["url"] ?? ""
-      return try loginResponse(for: url, requestId: request.requestId)
+      let operation = BrokerAutomationOperation(rawValue: request.command) ?? .login
+      return try credentialResponse(
+        for: url,
+        operation: operation,
+        requestId: request.requestId
+      )
     default:
       return ResponseEnvelope(
         ok: false,
@@ -321,13 +411,17 @@ final class BrokerServer {
     ]
   }
 
-  private func loginResponse(for rawURL: String, requestId: String?) throws -> ResponseEnvelope {
+  private func credentialResponse(
+    for rawURL: String,
+    operation: BrokerAutomationOperation,
+    requestId: String?
+  ) throws -> ResponseEnvelope {
     guard let url = URL(string: rawURL), let host = url.host?.lowercased(), !host.isEmpty else {
       return ResponseEnvelope(
         ok: false,
         code: 1,
         payload: nil,
-        error: "Invalid URL for native app login.",
+        error: "Invalid URL for native app \(operation.rawValue).",
         requestId: requestId
       )
     }
@@ -356,6 +450,7 @@ final class BrokerServer {
             "status": AnyCodable("approved"),
             "url": AnyCodable(credential.url),
             "domain": AnyCodable(credential.domain),
+            "intent": AnyCodable(operation.rawValue),
             "username": AnyCodable(credential.username),
             "password": AnyCodable(credential.password),
             "transport": AnyCodable("authentication_services"),
@@ -423,6 +518,7 @@ final class BrokerServer {
         "status": AnyCodable("approved"),
         "url": AnyCodable(credential.url),
         "domain": AnyCodable(credential.domain),
+        "intent": AnyCodable(operation.rawValue),
         "username": AnyCodable(credential.username),
         "password": AnyCodable(credential.password),
         "transport": AnyCodable("unix_socket"),

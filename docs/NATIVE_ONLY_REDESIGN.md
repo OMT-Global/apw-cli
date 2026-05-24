@@ -221,6 +221,9 @@ Deliverables:
 - `BrokerCoreTests` exercises the broker outcome paths via
   `StubCredentialBroker` for `success` / `denied` / `canceled` /
   `invalidResponse`, and asserts the broker error code mapping.
+- `BrokerAutomation` exposes a narrow Shortcuts / AppleScript request surface
+  for `login` and `fill`. Automation builds the same broker envelope as the CLI
+  path and still routes credential material through the user-mediated broker.
 
 **Phase 3 exit blockers still open**:
 
@@ -236,12 +239,16 @@ Deliverables:
 - Map `pw get <domain>` to the new login flow where appropriate
 - Remove unsupported commands from primary docs
 - Preserve a migration guide for operators moving from parity APW to native-only
+- Expose only mediated automation entrypoints for `login` and `fill` so
+  scripts can initiate broker requests without bypassing credential approval
 
 Deliverables:
 
 - clear CLI help text
 - explicit migration notices
 - browser/runtime code marked legacy
+- Shortcuts actions and an AppleScript dictionary for the supported broker
+  operations
 
 ### Phase 5: packaging and release
 

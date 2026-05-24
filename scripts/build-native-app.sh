@@ -9,6 +9,7 @@ DIST_DIR="$PACKAGE_DIR/dist"
 APP_DIR="$DIST_DIR/$APP_NAME"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
+RESOURCES_DIR="$CONTENTS_DIR/Resources"
 PLIST_PATH="$CONTENTS_DIR/Info.plist"
 EXECUTABLE_PATH="$PACKAGE_DIR/.build/release/$EXECUTABLE_NAME"
 VERSION="$(awk -F ' = ' '$1 == "version" { gsub(/"/, "", $2); print $2; exit }' "$ROOT_DIR/rust/Cargo.toml")"
@@ -21,9 +22,10 @@ fi
 swift build --package-path "$PACKAGE_DIR" -c release
 
 rm -rf "$APP_DIR"
-mkdir -p "$MACOS_DIR"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$EXECUTABLE_PATH" "$MACOS_DIR/$EXECUTABLE_NAME"
 chmod 0755 "$MACOS_DIR/$EXECUTABLE_NAME"
+cp "$PACKAGE_DIR/Resources/APW.sdef" "$RESOURCES_DIR/APW.sdef"
 
 cat >"$PLIST_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -48,6 +50,10 @@ cat >"$PLIST_PATH" <<EOF
   <string>$VERSION</string>
   <key>LSUIElement</key>
   <true/>
+  <key>NSAppleScriptEnabled</key>
+  <true/>
+  <key>OSAScriptingDefinition</key>
+  <string>APW.sdef</string>
 </dict>
 </plist>
 EOF
