@@ -48,6 +48,8 @@ jobs:
         run: cargo build --manifest-path rust/Cargo.toml --release
 
       - name: Build native app bundle
+        env:
+          APW_SPARKLE_PUBLIC_ED_KEY: ${{ vars.APW_SPARKLE_PUBLIC_ED_KEY || '' }}
         run: ./scripts/build-native-app.sh
 
       - name: Build local source tarball for Homebrew smoke
@@ -100,6 +102,8 @@ jobs:
           ./rust/target/release/apw status --json
 
       - name: Build native app bundle
+        env:
+          APW_SPARKLE_PUBLIC_ED_KEY: ${{ vars.APW_SPARKLE_PUBLIC_ED_KEY || '' }}
         run: ./scripts/build-native-app.sh
 
       - name: Homebrew smoke install from source tarball

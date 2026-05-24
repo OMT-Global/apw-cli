@@ -33,6 +33,9 @@ https://github.com/OMT-Global/apw-cli/releases/latest/download/appcast.xml
 This URL is controlled by the project repository and resolves to the appcast
 asset attached to the latest GitHub release. APW.app should set this URL in
 `Info.plist` with `SUFeedURL` once Sparkle is linked into the native app.
+`scripts/build-native-app.sh` renders those keys when
+`APW_SPARKLE_PUBLIC_ED_KEY` is set, so release automation can package a bundle
+with the real public key without committing placeholder update-trust material.
 
 The appcast contract is represented by
 `packaging/sparkle/appcast.template.xml`. The template is not a production
@@ -95,6 +98,8 @@ Tagged releases run this helper when the release runner has the
 the stable `/releases/latest/download/appcast.xml` feed URL resolves to a
 signed appcast. When the variable is absent, release automation emits a warning
 and skips appcast publication rather than inventing unsigned update metadata.
+Release runners should also set `APW_SPARKLE_PUBLIC_ED_KEY` to the public EdDSA
+key paired with the appcast signing key before enabling runtime update checks.
 
 ## Managed update control
 

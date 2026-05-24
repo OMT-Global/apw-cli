@@ -13,9 +13,15 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 PLIST_PATH="$CONTENTS_DIR/Info.plist"
 EXECUTABLE_PATH="$PACKAGE_DIR/.build/release/$EXECUTABLE_NAME"
 VERSION="$(awk -F ' = ' '$1 == "version" { gsub(/"/, "", $2); print $2; exit }' "$ROOT_DIR/rust/Cargo.toml")"
+PLIST_RENDERER="$ROOT_DIR/scripts/render-native-app-info-plist.sh"
 
 if [[ -z "$VERSION" ]]; then
   echo "Unable to determine APW version from rust/Cargo.toml" >&2
+  exit 1
+fi
+
+if [[ ! -x "$PLIST_RENDERER" ]]; then
+  echo "Expected Info.plist renderer not found or not executable: $PLIST_RENDERER" >&2
   exit 1
 fi
 
@@ -31,32 +37,7 @@ if [[ -n "$RESOURCE_BUNDLE" ]]; then
   cp -R "$RESOURCE_BUNDLE" "$RESOURCES_DIR/$(basename "$RESOURCE_BUNDLE")"
 fi
 
-cat >"$PLIST_PATH" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleDevelopmentRegion</key>
-  <string>en</string>
-  <key>CFBundleExecutable</key>
-  <string>$EXECUTABLE_NAME</string>
-  <key>CFBundleIdentifier</key>
-  <string>dev.omt.apw</string>
-  <key>CFBundleInfoDictionaryVersion</key>
-  <string>6.0</string>
-  <key>CFBundleName</key>
-  <string>APW</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>CFBundleShortVersionString</key>
-  <string>$VERSION</string>
-  <key>CFBundleVersion</key>
-  <string>$VERSION</string>
-  <key>LSUIElement</key>
-  <true/>
-</dict>
-</plist>
-EOF
+"$PLIST_RENDERER" "$PLIST_PATH" "$VERSION" "$EXECUTABLE_NAME"
 
 if command -v codesign >/dev/null 2>&1; then
   if ! codesign -s - --force --deep "$APP_DIR" 2>/dev/null; then
