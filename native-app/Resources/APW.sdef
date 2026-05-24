@@ -4,12 +4,12 @@
   <suite name="APW Automation" code="APWa" description="Mediated APW broker automation commands.">
     <command name="request login" code="APWalgon" description="Request a login credential through the APW broker. The user still approves the credential picker before credential material is returned.">
       <cocoa class="APWRequestLoginCommand"/>
-      <direct-parameter type="text" description="The HTTPS URL to request."/>
+      <direct-parameter type="text" description="The HTTPS URL passed to APWRequestLoginCommand."/>
       <result type="text" description="A JSON APW broker response envelope."/>
     </command>
     <command name="request fill" code="APWafill" description="Request a fill credential through the APW broker. The user still approves the credential picker before credential material is returned.">
       <cocoa class="APWRequestFillCommand"/>
-      <direct-parameter type="text" description="The HTTPS URL to request."/>
+      <direct-parameter type="text" description="The HTTPS URL passed to APWRequestFillCommand."/>
       <result type="text" description="A JSON APW broker response envelope."/>
     </command>
   </suite>
