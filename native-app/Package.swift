@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "APW",
+    defaultLocalization: "en",
     platforms: [
         .macOS(.v13),
     ],
@@ -13,7 +14,10 @@ let package = Package(
     targets: [
         .target(
             name: "NativeAppLib",
-            path: "Sources/NativeAppLib"
+            path: "Sources/NativeAppLib",
+            resources: [
+                .process("Resources"),
+            ]
         ),
         .executableTarget(
             name: "APW",
