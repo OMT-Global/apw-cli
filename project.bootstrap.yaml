@@ -85,6 +85,8 @@ ci:
     prFastCi: true
     extendedValidation: true
     claude: true
+    # Issue #58 decision: keep APW docs markdown-only for now. Do not add a
+    # Pages workflow until release-published operator docs need stable URLs.
     pagesDeploy: false
     ci: false
     extras: []
@@ -100,6 +102,8 @@ agents:
   sharedSkills: []
 capabilities:
   pages:
+    # Issue #58 decision: docs are served from the repository README/docs tree,
+    # not a rendered Pages site, until the release docs surface stabilizes.
     enabled: false
     provider: cloudflare-pages
     outputDir: dist
@@ -107,6 +111,7 @@ capabilities:
     enabled: false
     kind: none
   docsPublish:
+    # Issue #58 decision: no separate docs publishing pipeline.
     enabled: false
   containers:
     enabled: false
