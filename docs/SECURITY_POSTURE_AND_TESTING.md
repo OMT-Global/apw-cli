@@ -96,6 +96,12 @@ cargo test --manifest-path rust/Cargo.toml --test native_app_e2e
 ./scripts/verify-universal-binaries.sh
 ```
 
+Before claiming Phase 3 complete for a public release, run the real-hardware
+notarized broker validation in
+[PHASE3_HARDWARE_VALIDATION.md](PHASE3_HARDWARE_VALIDATION.md). This check is
+manual because CI cannot prove that the native iCloud Keychain picker appears
+for a notarized app with associated-domain entitlements.
+
 ## Security-focused regression coverage
 
 The Rust test suite covers:
@@ -109,6 +115,8 @@ The Rust test suite covers:
 - native app diagnostics and `APW_DEMO=1` bootstrap credential file initialization
 - end-to-end v2 app install, launch, status, doctor, and login flows
 - direct-exec fallback, unsupported-domain handling, denial handling, and malformed broker response mapping
+- a manual notarized-hardware validation contract for the Phase 3
+  AuthenticationServices broker flow
 - diagnostic-bundle layout, archive permissions, and fail-closed redaction
   when a plausible credential pattern would otherwise reach the bundle
 - external fallback provider path hardening, including relative paths, `~`, world-writable
