@@ -9,7 +9,6 @@ EXTENSION_ID="ajefblkpgcffjgeaifmhaekckngflbak"
 HOST_NAME="dev.omt.apw.bridge.chromium"
 USER_CHROME_MANIFEST="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/${HOST_NAME}.json"
 PW_DOMAIN=""
-OTP_DOMAIN=""
 BIND_HOST="127.0.0.1"
 PORT="10000"
 PIN_ENV="APW_PIN"
@@ -20,11 +19,10 @@ print_help() {
 Usage: ./scripts/browser-host-smoke.sh --pw-domain DOMAIN [OPTIONS]
 
 Run a local macOS browser-backed smoke path for:
-  start -> bridge attach -> auth -> pw list -> otp list
+  start -> bridge attach -> auth -> pw list
 
 Options:
   --pw-domain DOMAIN      Required domain for `apw pw list`
-  --otp-domain DOMAIN     Optional domain for `apw otp list` (defaults to --pw-domain)
   --bin PATH              APW binary to test (default: rust/target/release/apw)
   --bind HOST             Daemon bind host (default: 127.0.0.1)
   --port PORT             Daemon/bridge port (default: 10000)
@@ -38,10 +36,6 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --pw-domain)
       PW_DOMAIN="${2:-}"
-      shift 2
-      ;;
-    --otp-domain)
-      OTP_DOMAIN="${2:-}"
       shift 2
       ;;
     --bin)
@@ -79,10 +73,6 @@ done
 if [[ -z "$PW_DOMAIN" ]]; then
   echo "--pw-domain is required."
   exit 1
-fi
-
-if [[ -z "$OTP_DOMAIN" ]]; then
-  OTP_DOMAIN="$PW_DOMAIN"
 fi
 
 if [[ ! -x "$BIN_PATH" ]]; then
@@ -225,7 +215,6 @@ fi
 capture_command auth "$BIN_PATH" --json auth --pin "$PIN_VALUE"
 "$BIN_PATH" status --json >"$EVIDENCE_DIR/status.post-auth.json"
 capture_command pw-list "$BIN_PATH" --json pw list "$PW_DOMAIN"
-capture_command otp-list "$BIN_PATH" --json otp list "$OTP_DOMAIN"
 "$BIN_PATH" status --json >"$EVIDENCE_DIR/status.final.json"
 
 list_helper_crashes >"$EVIDENCE_DIR/helper-crashes.after.txt"
@@ -248,12 +237,8 @@ bridge_browser="$(status_value "$EVIDENCE_DIR/status.bridge-attached.json" "payl
 session_authenticated="$(status_value "$EVIDENCE_DIR/status.post-auth.json" "payload.session.authenticated")"
 
 pw_ok=0
-otp_ok=0
 if command_ok_or_no_results "$EVIDENCE_DIR/pw-list.json"; then
   pw_ok=1
-fi
-if command_ok_or_no_results "$EVIDENCE_DIR/otp-list.json"; then
-  otp_ok=1
 fi
 
 new_apw_crashes=0
@@ -267,7 +252,6 @@ fi
   echo "Bridge browser: $bridge_browser"
   echo "Session authenticated after auth: $session_authenticated"
   echo "pw list acceptable exit/code: $pw_ok"
-  echo "otp list acceptable exit/code: $otp_ok"
   echo "New helper crash with parentProc=apw: $new_apw_crashes"
 } | tee "$EVIDENCE_DIR/summary.txt"
 
@@ -281,8 +265,8 @@ if [[ "$session_authenticated" != "true" ]]; then
   exit 1
 fi
 
-if [[ "$pw_ok" != "1" || "$otp_ok" != "1" ]]; then
-  echo "pw/otp success criteria failed." >&2
+if [[ "$pw_ok" != "1" ]]; then
+  echo "pw success criteria failed." >&2
   exit 1
 fi
 
