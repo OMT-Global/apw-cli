@@ -24,6 +24,16 @@ Release reference version: `v2.0.0`
   invocation, requires an absolute executable path, marks JSON output as
   `transport: "external_cli"` / `securityMode: "reduced_external_cli"`, and does
   not cache returned credentials
+- supported fallback providers are `1password`, `bitwarden`, `keepassxc`, and
+  `pass`; all four reuse the same validated absolute-path execution model
+  (owner-only, no `~`, no relative paths, `0755`-or-tighter mode, bounded
+  output, process-group timeout)
+- the `keepassxc` provider additionally requires `fallbackProviderDatabase`
+  (an absolute `.kdbx` path) and reads the master password from the
+  `APW_KEEPASSXC_PASSWORD` environment variable, feeding it to
+  `keepassxc-cli` over stdin; the password is never written to disk or cached
+- the `pass` provider relies on `gpg-agent` for the unlock, so APW never
+  handles the master key
 
 ### Runtime broker hardening
 
@@ -121,6 +131,9 @@ The Rust test suite covers:
   when a plausible credential pattern would otherwise reach the bundle
 - external fallback provider path hardening, including relative paths, `~`, world-writable
   executables, and symlink targets
+- external fallback lookups for `1password`, `bitwarden`, `keepassxc`, and
+  `pass`, including KeePassXC master-password stdin feeding and the typed
+  errors for missing config, missing database, and missing entries
 - diagnostic-bundle redaction and fail-closed aborts when staged diagnostics look
   credential-like
 - threat-model drift checks so retired UDP/browser-helper/private-helper
