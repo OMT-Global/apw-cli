@@ -14,7 +14,6 @@ Options:
   --skip-brew-smoke    Skip Homebrew smoke step
   --host-smoke         Run the local Chrome/browser bridge host smoke after build
   --pw-domain DOMAIN   Required with --host-smoke; domain for `apw pw list`
-  --otp-domain DOMAIN  Optional with --host-smoke; domain for `apw otp list`
   --push               Push the release tag to `origin`
   --publish            Create/update GitHub release and upload release tarball
   --allow-dirty        Allow non-clean working tree for release
@@ -40,7 +39,6 @@ ALLOW_DIRTY=0
 PUBLISH_RELEASE=0
 HOST_SMOKE=0
 HOST_SMOKE_PW_DOMAIN=""
-HOST_SMOKE_OTP_DOMAIN=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -67,10 +65,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --pw-domain)
       HOST_SMOKE_PW_DOMAIN="${2:-}"
-      shift 2
-      ;;
-    --otp-domain)
-      HOST_SMOKE_OTP_DOMAIN="${2:-}"
       shift 2
       ;;
     --push)
@@ -316,16 +310,9 @@ printf '\n[5/9] Health check release binary...\n'
 
 if [[ "$HOST_SMOKE" -eq 1 ]]; then
   printf '\n[6/9] Running browser host smoke...\n'
-  if [[ -n "$HOST_SMOKE_OTP_DOMAIN" ]]; then
-    "$ROOT_DIR/scripts/browser-host-smoke.sh" \
-      --bin "$BIN_PATH" \
-      --pw-domain "$HOST_SMOKE_PW_DOMAIN" \
-      --otp-domain "$HOST_SMOKE_OTP_DOMAIN"
-  else
-    "$ROOT_DIR/scripts/browser-host-smoke.sh" \
-      --bin "$BIN_PATH" \
-      --pw-domain "$HOST_SMOKE_PW_DOMAIN"
-  fi
+  "$ROOT_DIR/scripts/browser-host-smoke.sh" \
+    --bin "$BIN_PATH" \
+    --pw-domain "$HOST_SMOKE_PW_DOMAIN"
 fi
 
 printf '\n[7/9] Creating tag %s...\n' "$TAG"

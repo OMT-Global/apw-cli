@@ -83,6 +83,37 @@ The Rust test suite covers:
 - native app diagnostics and `APW_DEMO=1` bootstrap credential file initialization
 - end-to-end v2 app install, launch, status, doctor, and login flows
 - direct-exec fallback, unsupported-domain handling, denial handling, and malformed broker response mapping
+- external fallback provider path hardening, including relative paths, `~`, world-writable
+  executables, and symlink targets
+- diagnostic-bundle redaction and fail-closed aborts when staged diagnostics look
+  credential-like
+- threat-model drift checks so retired UDP/browser-helper/private-helper
+  surfaces do not re-enter the supported v2 broker boundary without an explicit
+  documentation update
+
+The threat matrix and residual-risk owners are tracked in
+[THREAT_MODEL.md](THREAT_MODEL.md). When a new credential surface is added,
+update that matrix and add a focused regression in the Rust or Swift suite that
+proves the documented mitigation.
+
+The native app Swift test suite covers:
+
+- localized approval prompt copy for APW-owned UI
+- accessibility labels for the credential approval window and buttons
+- broker envelope parsing, permission checks, denial handling, and typed AuthenticationServices fallback errors
+
+## Accessibility and localization audit
+
+Rerun this checklist before each minor release and when changing APW-owned UI.
+Apple-owned AuthenticationServices picker UI is out of scope for direct labels,
+but the APW surfaces around it remain in scope.
+
+- VoiceOver announces the APW credential approval window with a clear label.
+- VoiceOver announces Allow and Deny buttons with action-oriented labels.
+- Keyboard-only users can reach and activate every APW-owned approval control.
+- APW-owned user-visible strings are loaded from `Localizable.strings`.
+- At least one non-English `.lproj` resource ships in `APW.app`.
+- Reduced motion, high contrast, and increased text size do not hide or truncate APW-owned approval text.
 
 ## Archive policy
 
