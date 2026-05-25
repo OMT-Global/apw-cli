@@ -120,13 +120,46 @@ in `~/.apw/config.json` with an absolute provider path:
 }
 ```
 
-Supported fallback providers are `1password` and `bitwarden`. Configuration alone
-does not activate fallback for `apw login`; callers must pass
-`apw login --external-fallback <url>` to explicitly choose this reduced-security
-path when the native broker is unavailable or returns no results. JSON fallback
-payloads use `transport: "external_cli"`, `securityMode: "reduced_external_cli"`,
-and `externalFallbackExplicit: true` so automation can distinguish them from
-native broker approvals. APW does not cache external-provider credentials.
+Supported fallback providers are `1password`, `bitwarden`, `keepassxc`, and
+`pass`. Configuration alone does not activate fallback for `apw login`; callers
+must pass `apw login --external-fallback <url>` to explicitly choose this
+reduced-security path when the native broker is unavailable or returns no
+results. JSON fallback payloads use `transport: "external_cli"`,
+`securityMode: "reduced_external_cli"`, and `externalFallbackExplicit: true` so
+automation can distinguish them from native broker approvals. APW does not
+cache external-provider credentials.
+
+### Provider-specific setup
+
+- **`1password`** — `fallbackProviderPath` points at the `op` CLI. The vault
+  must already be unlocked (`op signin`).
+- **`bitwarden`** — `fallbackProviderPath` points at the `bw` CLI. The vault
+  must already be unlocked and `BW_SESSION` exported.
+- **`keepassxc`** — `fallbackProviderPath` points at `keepassxc-cli` and
+  `fallbackProviderDatabase` must be set to the absolute path of a `.kdbx`
+  database. The master password is read from the `APW_KEEPASSXC_PASSWORD`
+  environment variable and fed to the CLI over stdin; keep it out of
+  persistent shell history.
+
+  ```json
+  {
+    "fallbackProvider": "keepassxc",
+    "fallbackProviderPath": "/opt/homebrew/bin/keepassxc-cli",
+    "fallbackProviderDatabase": "/path/to/Passwords.kdbx"
+  }
+  ```
+
+- **`pass`** ([passwordstore.org](https://www.passwordstore.org/)) —
+  `fallbackProviderPath` points at the `pass` CLI. `gpg-agent` handles the
+  unlock, so APW never sees the master key. Entries are discovered with
+  `pass find <host>`; an entry whose leaf name matches the host is preferred.
+  The first line of `pass show` is treated as the password, and
+  `user:` / `username:` / `login:` and `url:` / `website:` lines are parsed
+  for the remaining fields.
+
+Provider failure modes (locked vault, missing entry, no match) surface as typed
+APW errors: a missing entry maps to `no_results`, malformed CLI output maps to
+`proto_invalid_response`, and missing configuration maps to `invalid_config`.
 
 ## Common commands
 
@@ -135,6 +168,7 @@ apw --help
 apw app install
 apw app launch
 apw doctor
+apw doctor --bundle /tmp/apw-diagnostics.tar.gz
 APW_LOG=debug apw status --json
 apw status
 apw status --json

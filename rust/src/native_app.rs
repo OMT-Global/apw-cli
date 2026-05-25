@@ -808,7 +808,7 @@ fn send_request_via_executable(command: &str, payload: Value) -> Result<Value> {
     parse_response(value)
 }
 
-fn uuid_like_suffix() -> String {
+pub fn uuid_like_suffix() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
     format!("{:016x}{:016x}", rng.gen::<u64>(), rng.gen::<u64>())
@@ -817,11 +817,14 @@ fn uuid_like_suffix() -> String {
 fn external_fallback_status() -> Value {
     let config = read_config_file_or_empty();
     let provider_path = config.fallback_provider_path.unwrap_or_default();
+    let database = config.fallback_provider_database.unwrap_or_default();
     json!({
         "configured": config.fallback_provider.is_some(),
         "provider": config.fallback_provider.map(|provider| provider.as_str()),
         "providerPathConfigured": !provider_path.is_empty(),
         "providerPathAbsolute": Path::new(&provider_path).is_absolute(),
+        "providerDatabaseConfigured": !database.is_empty(),
+        "supportedProviders": ["1password", "bitwarden", "keepassxc", "pass"],
         "requiresExplicitLoginFlag": true,
         "loginFlag": "--external-fallback",
         "securityMode": "reduced_external_cli"
@@ -1115,13 +1118,28 @@ fn run_external_provider_command(
     config: &APWConfigV1,
     args: &[&str],
 ) -> Result<ExternalProviderCommandOutput> {
+    run_external_provider_command_with_stdin(provider, path, config, args, None)
+}
+
+fn run_external_provider_command_with_stdin(
+    provider: ExternalFallbackProvider,
+    path: &Path,
+    config: &APWConfigV1,
+    args: &[&str],
+    stdin_data: Option<&[u8]>,
+) -> Result<ExternalProviderCommandOutput> {
     let limits = external_provider_limits(config);
     reserve_external_provider_invocation(provider, &limits)?;
 
     let mut command = Command::new(path);
+    let stdin_mode = if stdin_data.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    };
     command
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(stdin_mode)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     // SAFETY: `pre_exec` runs after fork and before exec. The closure only calls
@@ -1146,6 +1164,28 @@ fn run_external_provider_command(
             ),
         )
     })?;
+    if let Some(data) = stdin_data {
+        let mut stdin = child.stdin.take().ok_or_else(|| {
+            APWError::new(
+                Status::ProcessNotRunning,
+                format!(
+                    "Failed to capture {} CLI stdin at {}.",
+                    provider.as_str(),
+                    path.display()
+                ),
+            )
+        })?;
+        stdin.write_all(data).map_err(|error| {
+            APWError::new(
+                Status::ProcessNotRunning,
+                format!("Failed to feed stdin to {} CLI: {error}", provider.as_str()),
+            )
+        })?;
+        // Drop stdin to close the write end; the child sees EOF and can
+        // continue (e.g. keepassxc-cli reads the master password and then
+        // proceeds with the lookup).
+        drop(stdin);
+    }
     let stdout = child.stdout.take().ok_or_else(|| {
         APWError::new(
             Status::ProcessNotRunning,
@@ -1294,6 +1334,12 @@ fn external_provider_login(url: &str) -> Result<Option<Value>> {
         }
         ExternalFallbackProvider::Bitwarden => {
             load_bitwarden_credential(&provider_path, &config, &host, url)?
+        }
+        ExternalFallbackProvider::KeePassXC => {
+            load_keepassxc_credential(&provider_path, &config, &host, url)?
+        }
+        ExternalFallbackProvider::Pass => {
+            load_pass_credential(&provider_path, &config, &host, url)?
         }
     };
     Ok(Some(payload))
@@ -1509,6 +1555,327 @@ fn load_bitwarden_credential(
         username,
         password,
     ))
+}
+
+/// Look up a credential via the KeePassXC CLI. Issue #49.
+///
+/// Requires `fallbackProviderDatabase` to be set to the absolute path of a
+/// `.kdbx` database. The master password is read from the env var
+/// `APW_KEEPASSXC_PASSWORD` and fed to keepassxc-cli over stdin. This is a
+/// reduced-security path (consistent with the rest of `--external-fallback`)
+/// — operators on managed hosts should prefer a key-protected database and
+/// keep the env var out of persistent shell history.
+fn load_keepassxc_credential(
+    path: &Path,
+    config: &APWConfigV1,
+    host: &str,
+    raw_url: &str,
+) -> Result<Value> {
+    let database = config
+        .fallback_provider_database
+        .as_deref()
+        .ok_or_else(|| {
+            APWError::new(
+                Status::InvalidConfig,
+                "Fallback provider `keepassxc` requires `fallbackProviderDatabase` to be set to an absolute .kdbx path.",
+            )
+        })?;
+    if database.starts_with('~') || !PathBuf::from(database).is_absolute() {
+        return Err(APWError::new(
+            Status::InvalidConfig,
+            format!(
+                "Fallback provider `keepassxc` database path `{database}` must be absolute; `~` and relative paths are not allowed."
+            ),
+        ));
+    }
+    let master_password = env::var("APW_KEEPASSXC_PASSWORD").map_err(|_| {
+        APWError::new(
+            Status::InvalidConfig,
+            "Fallback provider `keepassxc` requires the master password in APW_KEEPASSXC_PASSWORD for non-interactive use.",
+        )
+    })?;
+    let mut stdin_payload = master_password.into_bytes();
+    stdin_payload.push(b'\n');
+
+    let search_output = run_external_provider_command_with_stdin(
+        ExternalFallbackProvider::KeePassXC,
+        path,
+        config,
+        &["search", database, host],
+        Some(&stdin_payload),
+    )?;
+    if !search_output.success {
+        return Err(APWError::new(
+            Status::NoResults,
+            format!(
+                "KeePassXC CLI did not return a credential for {host}: {}",
+                String::from_utf8_lossy(&search_output.stderr).trim()
+            ),
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&search_output.stdout);
+    let entry = stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| {
+            !line.is_empty()
+                && !line.starts_with("Insert password")
+                && !line.starts_with("Enter password")
+        })
+        .ok_or_else(|| {
+            APWError::new(
+                Status::NoResults,
+                format!("KeePassXC CLI returned no entry for {host}."),
+            )
+        })?;
+
+    let show_output = run_external_provider_command_with_stdin(
+        ExternalFallbackProvider::KeePassXC,
+        path,
+        config,
+        &[
+            "show",
+            "--show-protected",
+            "--attributes",
+            "UserName,Password,URL",
+            database,
+            entry,
+        ],
+        Some(&stdin_payload),
+    )?;
+    if !show_output.success {
+        return Err(APWError::new(
+            Status::NoResults,
+            format!(
+                "KeePassXC CLI did not return a credential for {host}: {}",
+                String::from_utf8_lossy(&show_output.stderr).trim()
+            ),
+        ));
+    }
+    let show_stdout = String::from_utf8_lossy(&show_output.stdout);
+    let values: Vec<&str> = show_stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with("Insert password")
+                && !line.starts_with("Enter password")
+        })
+        .collect();
+    let (username, password, resolved_url) = match values.as_slice() {
+        [username, password] => (*username, *password, raw_url),
+        [username, password, url, ..] if !url.is_empty() => (*username, *password, *url),
+        [username, password, ..] => (*username, *password, raw_url),
+        _ => {
+            return Err(APWError::new(
+                Status::ProtoInvalidResponse,
+                "KeePassXC CLI did not return both a username and a password.",
+            ));
+        }
+    };
+
+    Ok(external_cli_payload(
+        ExternalFallbackProvider::KeePassXC,
+        host,
+        resolved_url,
+        username,
+        password,
+    ))
+}
+
+/// Look up a credential via the `pass` (passwordstore.org) CLI. Issue #49.
+///
+/// Discovery: `pass find <host>` lists entry paths whose name contains
+/// `<host>`. We pick the first matching path and then `pass show <path>`,
+/// which prints the password on line 1 and optional `user: ` / `username: `
+/// / `url: ` fields on subsequent lines. gpg-agent handles the unlock; APW
+/// never sees the master key.
+fn load_pass_credential(
+    path: &Path,
+    config: &APWConfigV1,
+    host: &str,
+    raw_url: &str,
+) -> Result<Value> {
+    let find_output = run_external_provider_command(
+        ExternalFallbackProvider::Pass,
+        path,
+        config,
+        &["find", host],
+    )?;
+    if !find_output.success {
+        return Err(APWError::new(
+            Status::NoResults,
+            format!(
+                "pass CLI did not return a credential for {host}: {}",
+                String::from_utf8_lossy(&find_output.stderr).trim()
+            ),
+        ));
+    }
+    let find_stdout = String::from_utf8_lossy(&find_output.stdout);
+    let entry = pass_pick_entry(&find_stdout, host).ok_or_else(|| {
+        APWError::new(
+            Status::NoResults,
+            format!("pass CLI returned no entry for {host}."),
+        )
+    })?;
+
+    let show_output = run_external_provider_command(
+        ExternalFallbackProvider::Pass,
+        path,
+        config,
+        &["show", &entry],
+    )?;
+    if !show_output.success {
+        return Err(APWError::new(
+            Status::NoResults,
+            format!(
+                "pass CLI did not return a credential for {entry}: {}",
+                String::from_utf8_lossy(&show_output.stderr).trim()
+            ),
+        ));
+    }
+
+    let show_stdout = String::from_utf8_lossy(&show_output.stdout);
+    let mut lines = show_stdout.lines();
+    let password = lines.next().map(str::trim).ok_or_else(|| {
+        APWError::new(
+            Status::ProtoInvalidResponse,
+            format!("pass entry {entry} returned no password."),
+        )
+    })?;
+    if password.is_empty() {
+        return Err(APWError::new(
+            Status::ProtoInvalidResponse,
+            format!("pass entry {entry} returned an empty password line."),
+        ));
+    }
+
+    let mut username: Option<String> = None;
+    let mut resolved_url: Option<String> = None;
+    for line in lines {
+        let (key, value) = match line.split_once(':') {
+            Some(parts) => parts,
+            None => continue,
+        };
+        let key = key.trim().to_ascii_lowercase();
+        let value = value.trim().to_string();
+        if value.is_empty() {
+            continue;
+        }
+        match key.as_str() {
+            "user" | "username" | "login" if username.is_none() => username = Some(value),
+            "url" | "website" if resolved_url.is_none() => resolved_url = Some(value),
+            _ => {}
+        }
+    }
+
+    let username = username.unwrap_or_else(|| {
+        // Fall back to the entry's leaf name minus any suffix that matches
+        // the host so e.g. `web/example.com/alice` yields `alice`.
+        entry
+            .rsplit('/')
+            .next()
+            .map(|leaf| {
+                leaf.trim_end_matches(host)
+                    .trim_end_matches('-')
+                    .to_string()
+            })
+            .unwrap_or_default()
+    });
+    let resolved_url = resolved_url.unwrap_or_else(|| raw_url.to_string());
+
+    Ok(external_cli_payload(
+        ExternalFallbackProvider::Pass,
+        host,
+        &resolved_url,
+        &username,
+        password,
+    ))
+}
+
+fn pass_pick_entry(find_output: &str, host: &str) -> Option<String> {
+    // `pass find <host>` prints a tree-style listing:
+    //
+    //   Search Terms: example.com
+    //   Password Store
+    //   └── example.com
+    //       └── alice
+    //
+    // Only lines that start with one of the tree-drawing characters are
+    // actual entry rows. The `Search Terms:` header and the `Password
+    // Store` root are not entries. Each rendered level is 4 columns wide
+    // (`└── ` or `├── ` or `│   `).
+    let mut rows: Vec<(usize, String)> = Vec::new();
+    let mut stack: Vec<String> = Vec::new();
+    for raw_line in find_output.lines() {
+        let line = raw_line.trim_end();
+        if line.is_empty() {
+            continue;
+        }
+        if !pass_line_is_tree_entry(line) {
+            continue;
+        }
+        let depth = pass_line_depth(line);
+        let name = pass_strip_tree_prefix(line);
+        if name.is_empty() {
+            continue;
+        }
+        stack.truncate(depth);
+        stack.push(name.to_string());
+        rows.push((depth, stack.join("/")));
+    }
+
+    let candidates: Vec<&str> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (depth, path))| {
+            let is_leaf = rows
+                .get(index + 1)
+                .map(|(next_depth, _)| next_depth <= depth)
+                .unwrap_or(true);
+            is_leaf.then_some(path.as_str())
+        })
+        .collect();
+
+    candidates
+        .iter()
+        .find(|c| {
+            c.rsplit('/')
+                .next()
+                .map(|leaf| leaf == host)
+                .unwrap_or(false)
+        })
+        .or_else(|| {
+            candidates
+                .iter()
+                .find(|c| c.split('/').any(|segment| segment == host))
+        })
+        .or_else(|| candidates.iter().find(|c| c.contains(host)))
+        .map(|c| (*c).to_string())
+}
+
+fn pass_line_is_tree_entry(line: &str) -> bool {
+    line.chars().any(|c| matches!(c, '└' | '├'))
+}
+
+fn pass_line_depth(line: &str) -> usize {
+    // Count the prefix characters that belong to the indentation/tree-art
+    // and convert to zero-based depth. Each rendered row includes its own
+    // branch marker (`└── ` or `├── `), so subtract that marker level after
+    // counting 4-column groups.
+    let mut prefix_chars: usize = 0;
+    for ch in line.chars() {
+        if matches!(ch, ' ' | '│' | '├' | '└' | '─' | '\t') {
+            prefix_chars += 1;
+        } else {
+            break;
+        }
+    }
+    (prefix_chars / 4).saturating_sub(1)
+}
+
+fn pass_strip_tree_prefix(line: &str) -> &str {
+    line.trim_start_matches([' ', '│', '├', '└', '─', '\t'])
 }
 
 fn one_password_item_matches_url(item: &Value, host: &str, raw_url: &str) -> bool {
@@ -2381,5 +2748,357 @@ print(json.dumps({
             Err(BoundedCommandError::Spawn(_)) => {}
             other => panic!("expected Spawn error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn pass_pick_entry_prefers_leaf_match_over_substring_match() {
+        let listing = "Search Terms: example.com\n\
+                       └── web/example.com/alice\n\
+                       \n\
+                       Search Terms: other\n\
+                       └── notes/example.com-secret-archive\n";
+        let picked = pass_pick_entry(listing, "example.com");
+        assert_eq!(picked.as_deref(), Some("web/example.com/alice"));
+    }
+
+    #[test]
+    fn pass_pick_entry_resets_stack_between_top_level_roots() {
+        let listing = [
+            "Search Terms: example.com",
+            "├── old-root",
+            "│   └── old.example.com",
+            "└── web",
+            "    └── example.com",
+        ]
+        .join("\n");
+        let picked = pass_pick_entry(&listing, "example.com");
+        assert_eq!(picked.as_deref(), Some("web/example.com"));
+    }
+
+    #[test]
+    fn pass_pick_entry_resets_stack_and_selects_leaf_under_second_root() {
+        let listing = [
+            "Search Terms: example.com",
+            "├── old-root",
+            "│   └── old.example.com",
+            "└── web",
+            "    └── example.com",
+            "        └── alice",
+        ]
+        .join("\n");
+        let picked = pass_pick_entry(&listing, "example.com");
+        assert_eq!(picked.as_deref(), Some("web/example.com/alice"));
+    }
+
+    #[test]
+    fn pass_pick_entry_falls_back_to_substring_match_when_no_leaf_matches() {
+        let listing = "Search Terms: example.com\n\
+                       └── notes/example.com-secret-archive\n";
+        let picked = pass_pick_entry(listing, "example.com");
+        assert_eq!(picked.as_deref(), Some("notes/example.com-secret-archive"));
+    }
+
+    #[test]
+    fn pass_pick_entry_returns_none_when_no_match() {
+        let listing = "Search Terms: example.com\n";
+        let picked = pass_pick_entry(listing, "example.com");
+        assert!(picked.is_none());
+    }
+
+    #[test]
+    #[serial]
+    fn login_can_fallback_to_pass_cli() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("pass");
+            fs::write(
+                &provider_path,
+                r##"#!/usr/bin/env python3
+import sys
+
+if sys.argv[1:] == ["find", "vault.example.com"]:
+    print("Search Terms: vault.example.com")
+    print("└── web/vault.example.com")
+elif sys.argv[1:] == ["show", "web/vault.example.com"]:
+    print("pass-secret")
+    print("user: alice@example.com")
+    print("url: https://vault.example.com/login")
+else:
+    raise SystemExit(1)
+"##,
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::Pass),
+                fallback_provider_path: Some(provider_path.display().to_string()),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            let payload = native_app_login("https://vault.example.com", true).unwrap();
+            assert_eq!(payload["source"], "pass");
+            assert_eq!(payload["transport"], "external_cli");
+            assert_eq!(payload["securityMode"], "reduced_external_cli");
+            assert_eq!(payload["username"], "alice@example.com");
+            assert_eq!(payload["password"], "pass-secret");
+            assert_eq!(payload["url"], "https://vault.example.com/login");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn login_pass_uses_second_top_level_root_entry() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("pass");
+            fs::write(
+                &provider_path,
+                r##"#!/usr/bin/env python3
+import sys
+
+if sys.argv[1:] == ["find", "example.com"]:
+    print("Search Terms: example.com")
+    print("├── old-root")
+    print("│   └── old.example.com")
+    print("└── web")
+    print("    └── example.com")
+elif sys.argv[1:] == ["show", "web/example.com"]:
+    print("pass-secret")
+    print("user: alice@example.com")
+    print("url: https://example.com/login")
+else:
+    sys.stderr.write("unexpected pass invocation: " + repr(sys.argv[1:]) + "\n")
+    raise SystemExit(1)
+"##,
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::Pass),
+                fallback_provider_path: Some(provider_path.display().to_string()),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            let payload = native_app_login("https://example.com", true).unwrap();
+            assert_eq!(payload["source"], "pass");
+            assert_eq!(payload["username"], "alice@example.com");
+            assert_eq!(payload["password"], "pass-secret");
+            assert_eq!(payload["url"], "https://example.com/login");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn login_pass_returns_no_results_when_entry_missing() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("pass");
+            fs::write(
+                &provider_path,
+                r##"#!/usr/bin/env python3
+import sys
+
+if sys.argv[1:] == ["find", "missing.example.com"]:
+    print("Search Terms: missing.example.com")
+    raise SystemExit(1)
+else:
+    raise SystemExit(1)
+"##,
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::Pass),
+                fallback_provider_path: Some(provider_path.display().to_string()),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            let err = native_app_login("https://missing.example.com", true).unwrap_err();
+            assert_eq!(err.code, Status::NoResults);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn login_can_fallback_to_keepassxc_cli() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("keepassxc-cli");
+            // The fake reads the master password from stdin, asserts it
+            // matches what the env var instructed APW to feed, then
+            // returns the right response for search and show.
+            fs::write(
+                &provider_path,
+                r##"#!/usr/bin/env python3
+import sys
+
+master = sys.stdin.readline().strip()
+if master != "correct-master-password":
+    sys.stderr.write(f"wrong master password: {master!r}\n")
+    raise SystemExit(2)
+
+argv = sys.argv[1:]
+if argv[:1] == ["search"] and len(argv) == 3:
+    print("web/vault.example.com/alice")
+elif argv[:3] == ["show", "--show-protected", "--attributes"]:
+    print("alice@example.com")
+    print("kdbx-secret")
+    print("https://vault.example.com/login")
+else:
+    sys.stderr.write(f"unsupported: {argv}\n")
+    raise SystemExit(1)
+"##,
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let database_path = provider_dir.path().join("Passwords.kdbx");
+            fs::write(&database_path, b"placeholder-kdbx").unwrap();
+
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::KeePassXC),
+                fallback_provider_path: Some(provider_path.display().to_string()),
+                fallback_provider_database: Some(database_path.display().to_string()),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            env::set_var("APW_KEEPASSXC_PASSWORD", "correct-master-password");
+            let payload = native_app_login("https://vault.example.com", true);
+            env::remove_var("APW_KEEPASSXC_PASSWORD");
+            let payload = payload.unwrap();
+            assert_eq!(payload["source"], "keepassxc");
+            assert_eq!(payload["transport"], "external_cli");
+            assert_eq!(payload["securityMode"], "reduced_external_cli");
+            assert_eq!(payload["username"], "alice@example.com");
+            assert_eq!(payload["password"], "kdbx-secret");
+            assert_eq!(payload["url"], "https://vault.example.com/login");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn login_keepassxc_requires_master_password_env() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("keepassxc-cli");
+            fs::write(&provider_path, b"#!/bin/sh\nexit 99\n").unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+            let database_path = provider_dir.path().join("Passwords.kdbx");
+            fs::write(&database_path, b"placeholder-kdbx").unwrap();
+
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::KeePassXC),
+                fallback_provider_path: Some(provider_path.display().to_string()),
+                fallback_provider_database: Some(database_path.display().to_string()),
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            env::remove_var("APW_KEEPASSXC_PASSWORD");
+            let err = native_app_login("https://vault.example.com", true).unwrap_err();
+            assert_eq!(err.code, Status::InvalidConfig);
+            assert!(
+                err.message.contains("APW_KEEPASSXC_PASSWORD"),
+                "expected APW_KEEPASSXC_PASSWORD hint, got: {}",
+                err.message
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn login_keepassxc_requires_database_field() {
+        with_temp_home(|| {
+            let provider_dir = TempDir::new().unwrap();
+            let provider_path = provider_dir.path().join("keepassxc-cli");
+            fs::write(&provider_path, b"#!/bin/sh\nexit 0\n").unwrap();
+            let mut permissions = fs::metadata(&provider_path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&provider_path, permissions).unwrap();
+
+            let config_root = home_dir().join(".apw");
+            fs::create_dir_all(&config_root).unwrap();
+            let config = APWConfigV1 {
+                username: "demo".to_string(),
+                shared_key: "demo-shared-key".to_string(),
+                fallback_provider: Some(ExternalFallbackProvider::KeePassXC),
+                fallback_provider_path: Some(provider_path.display().to_string()),
+                fallback_provider_database: None,
+                ..APWConfigV1::default()
+            };
+            fs::write(
+                config_root.join("config.json"),
+                serde_json::to_vec_pretty(&config).unwrap(),
+            )
+            .unwrap();
+
+            env::set_var("APW_KEEPASSXC_PASSWORD", "ignored");
+            let result = native_app_login("https://vault.example.com", true);
+            env::remove_var("APW_KEEPASSXC_PASSWORD");
+            let err = result.unwrap_err();
+            assert_eq!(err.code, Status::InvalidConfig);
+            assert!(
+                err.message.contains("fallbackProviderDatabase"),
+                "expected fallbackProviderDatabase hint, got: {}",
+                err.message
+            );
+        });
     }
 }
