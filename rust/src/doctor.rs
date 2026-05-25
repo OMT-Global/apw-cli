@@ -41,6 +41,8 @@ pub struct DoctorCheck {
     pub remediation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detected_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
 }
 
 impl DoctorCheck {
@@ -51,6 +53,7 @@ impl DoctorCheck {
             message: message.into(),
             remediation: None,
             detected_version: None,
+            details: None,
         }
     }
 
@@ -61,6 +64,11 @@ impl DoctorCheck {
 
     fn with_version(mut self, version: impl Into<String>) -> Self {
         self.detected_version = Some(version.into());
+        self
+    }
+
+    fn with_details(mut self, details: Value) -> Self {
+        self.details = Some(details);
         self
     }
 }
@@ -247,17 +255,44 @@ fn check_native_app_bundle() -> DoctorCheck {
     .with_remediation("Run `./scripts/build-native-app.sh`, then `apw app install`.")
 }
 
+fn check_managed_config() -> DoctorCheck {
+    let details = crate::utils::config_provenance_details();
+    let managed = details
+        .get("managed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if managed {
+        DoctorCheck::new(
+            "managed-config",
+            CheckStatus::Ok,
+            "Managed preferences are applied before user config.",
+        )
+        .with_details(details)
+    } else {
+        DoctorCheck::new(
+            "managed-config",
+            CheckStatus::Skip,
+            "No managed preferences were found.",
+        )
+        .with_details(details)
+    }
+}
+
 /// Probe each configured associated domain for a reachable AASA file.
-/// Domains are read from `APW_AASA_DOMAINS` (comma-separated) so this can
-/// be wired ahead of the `supportedDomains` config field landing. See
-/// issue #8.
+/// `APW_AASA_DOMAINS` remains a comma-separated override for CI probes;
+/// otherwise the check uses user or managed `supportedDomains` config.
 fn check_associated_domains() -> Option<DoctorCheck> {
-    let raw = std::env::var("APW_AASA_DOMAINS").ok()?;
-    let domains: Vec<&str> = raw
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
+    let configured_domains = std::env::var("APW_AASA_DOMAINS")
+        .ok()
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(crate::utils::configured_supported_domains_non_destructive);
+    let domains: Vec<&str> = configured_domains.iter().map(String::as_str).collect();
     if domains.is_empty() {
         return None;
     }
@@ -309,6 +344,7 @@ pub fn run_environment_checks() -> Vec<DoctorCheck> {
         check_detect_secrets(),
         check_signing_identity(),
         check_native_app_bundle(),
+        check_managed_config(),
     ];
     if let Some(runner) = check_runner_labels() {
         checks.push(runner);
@@ -347,6 +383,7 @@ pub fn checks_to_json(checks: &[DoctorCheck]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn check_status_label_is_uppercase() {
@@ -407,12 +444,42 @@ mod tests {
     }
 
     #[test]
+    #[serial]
+    fn managed_config_check_reports_setting_provenance_in_json() {
+        std::env::set_var(
+            "APW_MANAGED_PREFS_PLIST",
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>fallbackProvider</key>
+  <string>bitwarden</string>
+  <key>supportedDomains</key>
+  <array><string>example.com</string></array>
+</dict>
+</plist>"#,
+        );
+        let check = check_managed_config();
+        std::env::remove_var("APW_MANAGED_PREFS_PLIST");
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        let details = check.details.expect("managed config details");
+        assert_eq!(details["managed"], true);
+        assert!(details["settings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|setting| setting["key"] == "supportedDomains" && setting["source"] == "managed"));
+    }
+
+    #[test]
+    #[serial]
     fn associated_domains_check_skipped_when_env_unset() {
         std::env::remove_var("APW_AASA_DOMAINS");
         assert!(check_associated_domains().is_none());
     }
 
     #[test]
+    #[serial]
     fn associated_domains_check_reports_failure_for_unreachable_host() {
         // Use a guaranteed-unreachable .invalid TLD (RFC 2606). curl will
         // exit non-zero so the probe returns None and the check fails.
