@@ -2596,13 +2596,19 @@ mod tests {
             .set_read_timeout(Some(StdDuration::from_secs(1)))
             .unwrap();
         let payload = serde_json::to_vec(request).unwrap();
-        socket.send_to(&payload, ("127.0.0.1", port)).unwrap();
+        loop {
+            match socket.send_to(&payload, ("127.0.0.1", port)) {
+                Ok(_) => break,
+                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+                Err(error) => panic!("failed to send daemon test request: {error}"),
+            }
+        }
 
         let mut buffer = vec![0_u8; 4096];
         let size = loop {
             match socket.recv(&mut buffer) {
                 Ok(size) => break size,
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
                 Err(error) => panic!("failed to receive daemon test response: {error}"),
             }
         };
