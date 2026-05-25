@@ -207,6 +207,20 @@ pub struct APWConfigV1 {
         skip_serializing_if = "Option::is_none"
     )]
     pub fallback_provider_max_invocations: Option<u32>,
+    #[serde(
+        rename = "supportedDomains",
+        alias = "supported_domains",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub supported_domains: Vec<String>,
+    #[serde(
+        rename = "disableDemo",
+        alias = "disable_demo",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub disable_demo: Option<bool>,
     #[serde(rename = "createdAt")]
     pub created_at: String,
 }
@@ -234,6 +248,8 @@ impl Default for APWConfigV1 {
             fallback_provider_database: None,
             fallback_provider_timeout_ms: None,
             fallback_provider_max_invocations: None,
+            supported_domains: Vec::new(),
+            disable_demo: None,
             created_at: Utc::now().to_rfc3339(),
         }
     }
@@ -317,6 +333,18 @@ pub struct APWRuntimeConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub fallback_provider_max_invocations: Option<u32>,
+    #[serde(
+        rename = "supportedDomains",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub supported_domains: Vec<String>,
+    #[serde(
+        rename = "disableDemo",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub disable_demo: Option<bool>,
     #[serde(rename = "createdAt")]
     pub created_at: String,
 }
@@ -342,6 +370,8 @@ impl Default for APWRuntimeConfig {
             fallback_provider_database: None,
             fallback_provider_timeout_ms: None,
             fallback_provider_max_invocations: None,
+            supported_domains: Vec::new(),
+            disable_demo: None,
             created_at: Utc::now().to_rfc3339(),
         }
     }

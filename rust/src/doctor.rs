@@ -41,6 +41,8 @@ pub struct DoctorCheck {
     pub remediation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detected_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
 }
 
 impl DoctorCheck {
@@ -51,6 +53,7 @@ impl DoctorCheck {
             message: message.into(),
             remediation: None,
             detected_version: None,
+            details: None,
         }
     }
 
@@ -61,6 +64,11 @@ impl DoctorCheck {
 
     fn with_version(mut self, version: impl Into<String>) -> Self {
         self.detected_version = Some(version.into());
+        self
+    }
+
+    fn with_details(mut self, details: Value) -> Self {
+        self.details = Some(details);
         self
     }
 }
@@ -327,6 +335,29 @@ fn aasa_response_is_valid(response: &str) -> bool {
 /// Domains come from `supportedDomains` in `~/.apw/config.json`. The
 /// `APW_AASA_DOMAINS` environment variable remains a comma-separated override
 /// for CI and one-off operator validation. See issue #8.
+fn check_managed_config() -> DoctorCheck {
+    let details = crate::utils::config_provenance_details();
+    let managed = details
+        .get("managed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if managed {
+        DoctorCheck::new(
+            "managed-config",
+            CheckStatus::Ok,
+            "Managed preferences are applied before user config.",
+        )
+        .with_details(details)
+    } else {
+        DoctorCheck::new(
+            "managed-config",
+            CheckStatus::Skip,
+            "No managed preferences were found.",
+        )
+        .with_details(details)
+    }
+}
+
 fn check_associated_domains() -> Option<DoctorCheck> {
     let domains = configured_associated_domains();
     if domains.is_empty() {
@@ -380,6 +411,7 @@ pub fn run_environment_checks() -> Vec<DoctorCheck> {
         check_detect_secrets(),
         check_signing_identity(),
         check_native_app_bundle(),
+        check_managed_config(),
     ];
     if let Some(runner) = check_runner_labels() {
         checks.push(runner);
@@ -517,6 +549,34 @@ mod tests {
         let checks = run_environment_checks();
         let lines = render_check_lines(&checks);
         assert!(lines.iter().any(|line| line.starts_with('[')));
+    }
+
+    #[test]
+    #[serial]
+    fn managed_config_check_reports_setting_provenance_in_json() {
+        std::env::set_var(
+            "APW_MANAGED_PREFS_PLIST",
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>fallbackProvider</key>
+  <string>bitwarden</string>
+  <key>supportedDomains</key>
+  <array><string>example.com</string></array>
+</dict>
+</plist>"#,
+        );
+        let check = check_managed_config();
+        std::env::remove_var("APW_MANAGED_PREFS_PLIST");
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        let details = check.details.expect("managed config details");
+        assert_eq!(details["managed"], true);
+        assert!(details["settings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|setting| setting["key"] == "supportedDomains" && setting["source"] == "managed"));
     }
 
     #[test]
