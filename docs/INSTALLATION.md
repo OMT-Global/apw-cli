@@ -85,6 +85,12 @@ tar -xzf apw-macos-vX.Y.Z.tar.gz
 After `apw app install`, the CLI copies `APW.app` into
 `~/.apw/native-app/installed/APW.app`.
 
+Tagged release archives are signed and notarized by
+`.github/workflows/release.yml` when the Apple Developer ID and notary secrets
+listed in `docs/bootstrap/onboarding.md` are configured. If those optional
+secrets are absent, the workflow emits a warning and publishes an unstapled
+archive rather than failing unrelated release automation.
+
 ## Homebrew
 
 APW uses a **formula-plus-app-install** Homebrew model for the v2 line. The
