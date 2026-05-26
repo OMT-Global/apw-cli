@@ -38,9 +38,6 @@ jobs:
       - name: Rust tests
         run: cargo test --manifest-path rust/Cargo.toml
 
-      - name: Rust legacy parity tests
-        run: cargo test --manifest-path rust/Cargo.toml --test legacy_parity
-
       - name: Rust security regression tests
         run: cargo test --manifest-path rust/Cargo.toml --test security_regressions
 

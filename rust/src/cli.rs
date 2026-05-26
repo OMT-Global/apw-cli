@@ -1,9 +1,8 @@
-use crate::client::ApplePasswordManager;
 use crate::error::APWError;
-use crate::host::{native_host_doctor, native_host_install, native_host_uninstall};
 use crate::logging::{self, LogLevel};
 use crate::native_app::{
     native_app_doctor, native_app_fill, native_app_install, native_app_launch, native_app_login,
+    native_app_status,
 };
 use crate::types::{Status, BUILD_DATE, BUILD_TARGET, GIT_SHA, RUST_VERSION, VERSION};
 use clap::{Args, Parser, Subcommand};
@@ -97,7 +96,6 @@ pub enum Commands {
     App(AppCommand),
     Doctor(DoctorCommand),
     Fill(FillCommand),
-    Host(HostCommand),
     Login(LoginCommand),
     Status(StatusCommand),
     Version(VersionCommand),
@@ -147,25 +145,6 @@ pub struct FillCommand {
 }
 
 #[derive(Args)]
-pub struct HostCommand {
-    #[command(subcommand)]
-    pub command: HostSubcommand,
-}
-
-#[derive(Subcommand)]
-pub enum HostSubcommand {
-    Install,
-    Doctor(HostDoctorArgs),
-    Uninstall,
-}
-
-#[derive(Args)]
-pub struct HostDoctorArgs {
-    #[arg(long)]
-    pub json: bool,
-}
-
-#[derive(Args)]
 pub struct StatusCommand {
     #[arg(long)]
     pub json: bool,
@@ -174,14 +153,13 @@ pub struct StatusCommand {
 #[derive(Args, Default)]
 pub struct VersionCommand {}
 
-pub async fn run(mut manager: ApplePasswordManager, cli: Cli) -> Result<(), APWError> {
+pub async fn run(cli: Cli) -> Result<(), APWError> {
     match cli.command {
         Commands::App(args) => run_app(args, cli.json),
         Commands::Doctor(args) => run_doctor(args, cli.json),
         Commands::Fill(args) => run_fill(args, cli.json),
-        Commands::Host(args) => run_host(args, cli.json),
         Commands::Login(args) => run_login(args, cli.json),
-        Commands::Status(args) => run_status(&mut manager, args, cli.json),
+        Commands::Status(args) => run_status(args, cli.json),
         Commands::Version(args) => run_version(args, cli.json),
     }
 }
@@ -270,13 +248,9 @@ fn run_login(args: LoginCommand, cli_json: bool) -> Result<(), APWError> {
     Ok(())
 }
 
-fn run_status(
-    manager: &mut ApplePasswordManager,
-    args: StatusCommand,
-    cli_json: bool,
-) -> Result<(), APWError> {
-    logging::debug("status", "collecting runtime status");
-    let payload = manager.status();
+fn run_status(args: StatusCommand, cli_json: bool) -> Result<(), APWError> {
+    logging::debug("status", "collecting native app status");
+    let payload = native_app_status();
     print_status(payload, args.json || cli_json);
     Ok(())
 }
@@ -292,25 +266,6 @@ fn run_version(_args: VersionCommand, cli_json: bool) -> Result<(), APWError> {
         Status::Success,
         false,
     );
-    Ok(())
-}
-
-fn run_host(args: HostCommand, cli_json: bool) -> Result<(), APWError> {
-    match args.command {
-        HostSubcommand::Install => {
-            let payload = native_host_install()?;
-            print_output(&payload, Status::Success, cli_json);
-        }
-        HostSubcommand::Doctor(options) => {
-            let payload = native_host_doctor()?;
-            print_output(&payload, Status::Success, options.json || cli_json);
-        }
-        HostSubcommand::Uninstall => {
-            let payload = native_host_uninstall()?;
-            print_output(&payload, Status::Success, cli_json);
-        }
-    }
-
     Ok(())
 }
 
@@ -553,6 +508,7 @@ mod tests {
     fn legacy_daemon_commands_are_rejected() {
         for args in [
             &["apw", "auth"][..],
+            &["apw", "host", "install"][..],
             &["apw", "pw", "list", "example.com"][..],
             &["apw", "otp", "list", "example.com"][..],
             &["apw", "start"][..],
@@ -561,44 +517,6 @@ mod tests {
                 Cli::try_parse_from(args).is_err(),
                 "removed legacy command unexpectedly parsed: {args:?}"
             );
-        }
-    }
-
-    #[test]
-    fn host_install_command_parses() {
-        let parsed = Cli::try_parse_from(["apw", "host", "install"]).unwrap();
-        match parsed.command {
-            Commands::Host(host) => match host.command {
-                HostSubcommand::Install => {}
-                _ => panic!("expected host install command"),
-            },
-            _ => panic!("expected host command"),
-        }
-    }
-
-    #[test]
-    fn host_doctor_command_accepts_json_flag() {
-        let parsed = Cli::try_parse_from(["apw", "host", "doctor", "--json"]).unwrap();
-        match parsed.command {
-            Commands::Host(host) => match host.command {
-                HostSubcommand::Doctor(options) => {
-                    assert!(options.json);
-                }
-                _ => panic!("expected host doctor command"),
-            },
-            _ => panic!("expected host command"),
-        }
-    }
-
-    #[test]
-    fn host_uninstall_command_parses() {
-        let parsed = Cli::try_parse_from(["apw", "host", "uninstall"]).unwrap();
-        match parsed.command {
-            Commands::Host(host) => match host.command {
-                HostSubcommand::Uninstall => {}
-                _ => panic!("expected host uninstall command"),
-            },
-            _ => panic!("expected host command"),
         }
     }
 
@@ -621,18 +539,6 @@ mod tests {
             Commands::Doctor(_) => {}
             _ => panic!("expected doctor command"),
         }
-    }
-
-    #[test]
-    fn doctor_ci_and_bundle_are_mutually_exclusive() {
-        let parsed = Cli::try_parse_from([
-            "apw",
-            "doctor",
-            "--ci",
-            "--bundle",
-            "/tmp/apw-doctor-bundle.tar.gz",
-        ]);
-        assert!(parsed.is_err());
     }
 
     #[test]

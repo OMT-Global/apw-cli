@@ -10,9 +10,13 @@ Release reference version: `v2.0.0`
 
 - Supported v2 implementation: [`rust/`](../rust/) + `native-app/`
 - Archived implementation: [`legacy/deno/`](../legacy/deno/)
+- Archived browser/helper implementation:
+  [`legacy/browser-bridge/`](../legacy/browser-bridge/),
+  [`legacy/native-host/`](../legacy/native-host/), and
+  [`legacy/rust-src/`](../legacy/rust-src/)
 - Packaging, release, fixes, and hardening land in the Rust CLI and native app
-- Legacy daemon/browser-helper code that remains in-tree is migration-only and
-  is no longer exposed through the active CLI contract
+- Legacy daemon/browser-helper code is no longer in the active Rust module tree
+  and is preserved only for historical audit work
 
 ## Removed commands
 
@@ -77,22 +81,14 @@ cargo test --manifest-path rust/Cargo.toml --all-targets
 bash scripts/ci/run-quality-indicators.sh
 ```
 
-Legacy parity harness for retained status-shape compatibility and removed-command
-regression coverage:
-
-```bash
-cargo test --manifest-path rust/Cargo.toml --test legacy_parity
-```
-
 ## Release expectations
 
 Before tagging a public release:
 
 1. Keep versioned surfaces in sync
 2. Run the Rust gates
-3. Run the parity harness as a migration safeguard
-4. Run the security regression matrix
-5. Build the app bundle with `./scripts/build-native-app.sh`
+3. Run the security regression matrix
+4. Build the app bundle with `./scripts/build-native-app.sh`
 
 Related docs:
 
