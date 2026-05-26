@@ -149,6 +149,9 @@ jobs:
       - name: Package release archive
         run: ./scripts/package-release-archive.sh "${GITHUB_REF_NAME}"
 
+      - name: Package release DMG
+        run: ./scripts/package-release-dmg.sh "${GITHUB_REF_NAME}"
+
       - name: Validate release archive contents
         run: |
           archive="dist/apw-macos-${GITHUB_REF_NAME}.tar.gz"
@@ -160,10 +163,23 @@ jobs:
       - name: Validate universal release binaries
         run: ./scripts/verify-universal-binaries.sh
 
+      - name: Validate release DMG checksum
+        run: |
+          dmg="dist/apw-macos-${GITHUB_REF_NAME}.dmg"
+          test -f "$dmg"
+          test -f "$dmg.sha256"
+          (
+            cd dist
+            shasum -a 256 -c "apw-macos-${GITHUB_REF_NAME}.dmg.sha256"
+          )
+
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/apw-macos-${{ github.ref_name }}.tar.gz
+          files: |
+            dist/apw-macos-${{ github.ref_name }}.tar.gz
+            dist/apw-macos-${{ github.ref_name }}.dmg
+            dist/apw-macos-${{ github.ref_name }}.dmg.sha256
 
   publish-homebrew-tap:
     name: Publish Homebrew tap PR
