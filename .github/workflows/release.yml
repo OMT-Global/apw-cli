@@ -45,6 +45,8 @@ jobs:
           cargo test --manifest-path rust/Cargo.toml --test security_regressions
 
       - name: Build universal release binaries
+        env:
+          APW_SPARKLE_PUBLIC_ED_KEY: ${{ vars.APW_SPARKLE_PUBLIC_ED_KEY || '' }}
         run: ./scripts/build-universal-release.sh
 
       - name: Build local source tarball for Homebrew smoke
@@ -97,6 +99,8 @@ jobs:
           ./rust/target/release/apw status --json
 
       - name: Build native app bundle
+        env:
+          APW_SPARKLE_PUBLIC_ED_KEY: ${{ vars.APW_SPARKLE_PUBLIC_ED_KEY || '' }}
         run: ./scripts/build-native-app.sh
 
       - name: Sign and notarize native app bundle
@@ -149,6 +153,36 @@ jobs:
       - name: Package release archive
         run: ./scripts/package-release-archive.sh "${GITHUB_REF_NAME}"
 
+      - name: Prepare signed Sparkle appcast
+        id: sparkle_appcast
+        env:
+          SPARKLE_GENERATE_APPCAST: ${{ vars.SPARKLE_GENERATE_APPCAST || '' }}
+        run: |
+          if [ -z "$SPARKLE_GENERATE_APPCAST" ]; then
+            echo "::warning::SPARKLE_GENERATE_APPCAST is not configured; skipping Sparkle appcast publication."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          app_zip="dist/APW.app-${GITHUB_REF_NAME}.zip"
+          release_notes="dist/APW.app-${GITHUB_REF_NAME}.md"
+
+          ditto -c -k --keepParent native-app/dist/APW.app "$app_zip"
+          {
+            echo "# APW ${GITHUB_REF_NAME}"
+            echo
+            echo "See the GitHub release notes for this tag."
+          } > "$release_notes"
+
+          ./scripts/prepare-sparkle-appcast.sh \
+            --archive "$app_zip" \
+            --release-notes "$release_notes" \
+            --updates-dir dist/sparkle-updates \
+            --generate-appcast "$SPARKLE_GENERATE_APPCAST"
+
+          cp dist/sparkle-updates/appcast.xml dist/appcast.xml
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
       - name: Package release DMG
         run: ./scripts/package-release-dmg.sh "${GITHUB_REF_NAME}"
 
@@ -180,6 +214,14 @@ jobs:
             dist/apw-macos-${{ github.ref_name }}.tar.gz
             dist/apw-macos-${{ github.ref_name }}.dmg
             dist/apw-macos-${{ github.ref_name }}.dmg.sha256
+
+      - name: Publish Sparkle appcast assets
+        if: steps.sparkle_appcast.outputs.available == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/APW.app-${{ github.ref_name }}.zip
+            dist/appcast.xml
 
   publish-homebrew-tap:
     name: Publish Homebrew tap PR
