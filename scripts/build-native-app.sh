@@ -62,6 +62,7 @@ rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$EXECUTABLE_PATH" "$MACOS_DIR/$EXECUTABLE_NAME"
 chmod 0755 "$MACOS_DIR/$EXECUTABLE_NAME"
+cp "$PACKAGE_DIR/Resources/APW.sdef" "$RESOURCES_DIR/APW.sdef"
 
 RESOURCE_BUNDLE="$(find "$PACKAGE_DIR/.build" \( -path '*/release/*.bundle' -o -path '*/Release/*.bundle' \) -type d -name '*NativeAppLib*.bundle' | head -n 1 || true)"
 if [[ -n "$RESOURCE_BUNDLE" ]]; then

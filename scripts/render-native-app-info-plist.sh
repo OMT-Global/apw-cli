@@ -47,6 +47,10 @@ mkdir -p "$(dirname "$OUTPUT_PATH")"
   <string>$VERSION</string>
   <key>LSUIElement</key>
   <true/>
+  <key>NSAppleScriptEnabled</key>
+  <true/>
+  <key>OSAScriptingDefinition</key>
+  <string>APW.sdef</string>
 EOF
 
   if [ -n "$SPARKLE_PUBLIC_ED_KEY" ]; then
