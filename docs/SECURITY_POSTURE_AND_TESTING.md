@@ -38,7 +38,8 @@ Release reference version: `v2.0.0`
 ### Runtime broker hardening
 
 - the v2 app broker uses a same-user local UNIX socket under `~/.apw/native-app/`
-- `status --json` exposes app/broker readiness while retaining legacy daemon diagnostics
+- `status --json` exposes native app broker readiness; legacy
+  daemon/host/bridge diagnostics are archived under `legacy/`
 - requests and responses use typed JSON envelopes with bounded payload sizes
 - Shortcuts and AppleScript automation entrypoints build the same broker
   request envelope as CLI `apw login` / `apw fill`; they do not read credential
@@ -107,7 +108,6 @@ Run these before publishing:
 cargo fmt --manifest-path rust/Cargo.toml -- --check
 cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path rust/Cargo.toml --all-targets
-cargo test --manifest-path rust/Cargo.toml --test legacy_parity
 cargo test --manifest-path rust/Cargo.toml --test native_app_e2e
 ./scripts/ci/validate-appcast-contract.sh
 ./scripts/build-universal-release.sh
@@ -131,7 +131,7 @@ The Rust test suite covers:
 
 - invalid PIN rejection before transport use
 - invalid URL rejection before auth dependency
-- stable JSON status shape
+- stable native app JSON status shape
 - launch failure precedence over session errors
 - malformed or oversized payload rejection
 - native app socket timeout handling
@@ -184,7 +184,8 @@ but the APW surfaces around it remain in scope.
 
 ## Archive policy
 
-The Deno implementation is archived and not part of the supported security
-surface. Use it only for compatibility audit work.
+The historical Deno, browser bridge, native host, and legacy Rust helper
+implementations are archived and not part of the supported security surface.
+Use them only for compatibility audit work.
 
 Archive rules: [ARCHIVE_POLICY.md](ARCHIVE_POLICY.md)
