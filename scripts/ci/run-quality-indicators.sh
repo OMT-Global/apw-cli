@@ -16,7 +16,9 @@ if [[ "${APW_RUN_COVERAGE:-0}" == "1" ]]; then
       --lcov \
       --output-path "$LCOV_PATH"
   else
-    echo "Skipping coverage collection: cargo-llvm-cov is not installed." >&2
+    echo "cargo-llvm-cov is required when APW_RUN_COVERAGE=1." >&2
+    echo "Install it or unset APW_RUN_COVERAGE to run the source-only CRAP report." >&2
+    exit 1
   fi
 fi
 
@@ -27,7 +29,9 @@ if [[ "${APW_RUN_MUTATION:-0}" == "1" ]]; then
       --output rust/target/mutants \
       --timeout "${APW_MUTATION_TIMEOUT:-30}"
   else
-    echo "Skipping mutation testing: cargo-mutants is not installed." >&2
+    echo "cargo-mutants is required when APW_RUN_MUTATION=1." >&2
+    echo "Install it or unset APW_RUN_MUTATION to run CRAP indicators only." >&2
+    exit 1
   fi
 fi
 
