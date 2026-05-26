@@ -10,10 +10,12 @@ APP_DIR="$DIST_DIR/$APP_NAME"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
+FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 PLIST_PATH="$CONTENTS_DIR/Info.plist"
 EXECUTABLE_PATH="$PACKAGE_DIR/.build/release/$EXECUTABLE_NAME"
 UNIVERSAL=0
 VERSION="$(awk -F ' = ' '$1 == "version" { gsub(/"/, "", $2); print $2; exit }' "$ROOT_DIR/rust/Cargo.toml")"
+PLIST_RENDERER="$ROOT_DIR/scripts/render-native-app-info-plist.sh"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -44,6 +46,11 @@ if [[ -z "$VERSION" ]]; then
   exit 1
 fi
 
+if [[ ! -x "$PLIST_RENDERER" ]]; then
+  echo "Expected Info.plist renderer not found or not executable: $PLIST_RENDERER" >&2
+  exit 1
+fi
+
 if [[ "$UNIVERSAL" -eq 1 ]]; then
   swift build --package-path "$PACKAGE_DIR" -c release --arch arm64 --arch x86_64
   EXECUTABLE_PATH="$PACKAGE_DIR/.build/apple/Products/Release/$EXECUTABLE_NAME"
@@ -62,36 +69,26 @@ if [[ -n "$RESOURCE_BUNDLE" ]]; then
   cp -R "$RESOURCE_BUNDLE" "$RESOURCES_DIR/$(basename "$RESOURCE_BUNDLE")"
 fi
 
-cat >"$PLIST_PATH" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleDevelopmentRegion</key>
-  <string>en</string>
-  <key>CFBundleExecutable</key>
-  <string>$EXECUTABLE_NAME</string>
-  <key>CFBundleIdentifier</key>
-  <string>dev.omt.apw</string>
-  <key>CFBundleInfoDictionaryVersion</key>
-  <string>6.0</string>
-  <key>CFBundleName</key>
-  <string>APW</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>CFBundleShortVersionString</key>
-  <string>$VERSION</string>
-  <key>CFBundleVersion</key>
-  <string>$VERSION</string>
-  <key>LSUIElement</key>
-  <true/>
-  <key>NSAppleScriptEnabled</key>
-  <true/>
-  <key>OSAScriptingDefinition</key>
-  <string>APW.sdef</string>
-</dict>
-</plist>
-EOF
+if otool -L "$MACOS_DIR/$EXECUTABLE_NAME" | grep -q '@rpath/Sparkle.framework/'; then
+  SPARKLE_FRAMEWORK="$(find "$PACKAGE_DIR/.build" -path '*/release/Sparkle.framework' -type d | head -n 1 || true)"
+  if [[ -z "$SPARKLE_FRAMEWORK" ]]; then
+    echo "APW links Sparkle.framework but SwiftPM did not produce a release framework." >&2
+    exit 1
+  fi
+  mkdir -p "$FRAMEWORKS_DIR"
+  if command -v ditto >/dev/null 2>&1; then
+    ditto "$SPARKLE_FRAMEWORK" "$FRAMEWORKS_DIR/Sparkle.framework"
+  else
+    cp -R "$SPARKLE_FRAMEWORK" "$FRAMEWORKS_DIR/"
+  fi
+  if command -v install_name_tool >/dev/null 2>&1; then
+    if ! otool -l "$MACOS_DIR/$EXECUTABLE_NAME" | grep -q '@loader_path/../Frameworks'; then
+      install_name_tool -add_rpath '@loader_path/../Frameworks' "$MACOS_DIR/$EXECUTABLE_NAME"
+    fi
+  fi
+fi
+
+"$PLIST_RENDERER" "$PLIST_PATH" "$VERSION" "$EXECUTABLE_NAME"
 
 if command -v codesign >/dev/null 2>&1; then
   if ! codesign -s - --force --deep "$APP_DIR" 2>/dev/null; then

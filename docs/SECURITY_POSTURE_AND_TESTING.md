@@ -109,9 +109,15 @@ cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path rust/Cargo.toml --all-targets
 cargo test --manifest-path rust/Cargo.toml --test legacy_parity
 cargo test --manifest-path rust/Cargo.toml --test native_app_e2e
+./scripts/ci/validate-appcast-contract.sh
 ./scripts/build-universal-release.sh
 ./scripts/verify-universal-binaries.sh
 ```
+
+In-app updates must follow the signed Sparkle appcast contract in
+[IN_APP_UPDATES.md](IN_APP_UPDATES.md). Release automation must not publish an
+appcast until the APW.app archive passes code-signing, Gatekeeper, and
+notarization staple validation.
 
 Before claiming Phase 3 complete for a public release, run the real-hardware
 notarized broker validation in
@@ -133,6 +139,7 @@ The Rust test suite covers:
 - end-to-end v2 app install, launch, status, doctor, and login flows
 - Shortcuts / AppleScript automation envelope parity for `login` and `fill`
 - direct-exec fallback, unsupported-domain handling, denial handling, and malformed broker response mapping
+- signed appcast contract requirements for the future APW.app in-app update channel
 - a manual notarized-hardware validation contract for the Phase 3
   AuthenticationServices broker flow
 - diagnostic-bundle layout, archive permissions, and fail-closed redaction

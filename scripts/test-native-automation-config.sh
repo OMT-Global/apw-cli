@@ -6,6 +6,7 @@ APP_INTENTS="native-app/Sources/APW/APWAutomationIntents.swift"
 APPLE_SCRIPT_COMMANDS="native-app/Sources/APW/APWAppleScriptCommands.swift"
 BROKER_CORE_TESTS="native-app/Tests/NativeAppTests/BrokerCoreTests.swift"
 BUILD_SCRIPT="scripts/build-native-app.sh"
+PLIST_RENDERER="scripts/render-native-app-info-plist.sh"
 
 require_line() {
   local file="$1"
@@ -50,8 +51,8 @@ require_line "$APPLE_SCRIPT_COMMANDS" "BrokerAutomation.performResponseData" "Ap
 require_line "$APPLE_SCRIPT_COMMANDS" "performOffMainThreadWhilePumpingRunLoop" "AppleScript commands must avoid blocking the main AppKit event loop."
 
 require_line "$BUILD_SCRIPT" 'cp "$PACKAGE_DIR/Resources/APW.sdef" "$RESOURCES_DIR/APW.sdef"' "APW.sdef must be copied into the app bundle."
-require_line "$BUILD_SCRIPT" "<key>NSAppleScriptEnabled</key>" "App bundle must enable AppleScript."
-require_line "$BUILD_SCRIPT" "<key>OSAScriptingDefinition</key>" "App bundle must publish the scripting definition."
+require_line "$PLIST_RENDERER" "<key>NSAppleScriptEnabled</key>" "App bundle must enable AppleScript."
+require_line "$PLIST_RENDERER" "<key>OSAScriptingDefinition</key>" "App bundle must publish the scripting definition."
 require_line "native-app/Sources/NativeAppLib/BrokerCore.swift" "runScriptableBrokerApp" "Scriptable app launches must run an AppKit event loop."
 require_line "native-app/Sources/NativeAppLib/BrokerCore.swift" "NSApplication.shared" "Scriptable app launches must initialize NSApplication."
 

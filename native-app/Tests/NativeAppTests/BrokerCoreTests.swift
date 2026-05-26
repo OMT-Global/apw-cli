@@ -19,6 +19,20 @@ private struct StubCredentialBroker: CredentialBroker {
   }
 }
 
+private final class StubUpdateRuntime: InAppUpdateRuntime {
+  private(set) var startCount = 0
+  let state: InAppUpdateRuntimeState
+
+  init(state: InAppUpdateRuntimeState = .starting) {
+    self.state = state
+  }
+
+  func startIfAllowed() -> InAppUpdateRuntimeState {
+    startCount += 1
+    return state
+  }
+}
+
 private final class RecordingCredentialBroker: CredentialBroker {
   let outcome: CredentialBrokerResult
   private(set) var requestedURLs: [String] = []
@@ -50,13 +64,24 @@ final class BrokerCoreTests: XCTestCase {
   private func makeServer(
     root: URL,
     decision: Bool = true,
-    credentialBroker: CredentialBroker? = nil
+    credentialBroker: CredentialBroker? = nil,
+    updatePolicyDefaults: UserDefaults = .standard,
+    updateRuntime: InAppUpdateRuntime? = nil
   ) -> BrokerServer {
     BrokerServer(
       paths: makePaths(root),
       approvalPrompter: StubApprovalPrompter(decision: decision),
-      credentialBroker: credentialBroker
+      credentialBroker: credentialBroker,
+      updatePolicyDefaults: updatePolicyDefaults,
+      updateRuntime: updateRuntime
     )
+  }
+
+  private func makeUpdatePolicyDefaults() throws -> UserDefaults {
+    let suiteName = "dev.omt.apw.tests.\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defaults.removePersistentDomain(forName: suiteName)
+    return defaults
   }
 
   private func writeCredentials(
@@ -256,6 +281,69 @@ final class BrokerCoreTests: XCTestCase {
 
     XCTAssertNotNil(guidance)
     XCTAssertFalse(guidance?.contains(where: { $0.contains("APW_NATIVE_APP_AUTO_APPROVE") }) ?? true)
+  }
+
+  func testStatusReportsManagedInAppUpdatePolicy() throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let defaults = try makeUpdatePolicyDefaults()
+    defaults.set(true, forKey: updatesDisabledPreferenceKey)
+    let server = makeServer(root: root, updatePolicyDefaults: defaults)
+
+    let response = try server.dispatch(request: RequestEnvelope(
+      requestId: "status",
+      command: "status",
+      payload: nil
+    ))
+    let updates = try XCTUnwrap(response.payload?["inAppUpdates"]?.value as? [String: Any])
+
+    XCTAssertEqual(updates["feedURL"] as? String, appcastFeedURL)
+    XCTAssertEqual(updates["managedPreferenceDomain"] as? String, managedUpdatePreferenceDomain)
+    XCTAssertEqual(updates["managedDisableKey"] as? String, updatesDisabledPreferenceKey)
+    XCTAssertEqual(updates["updatesDisabled"] as? Bool, true)
+  }
+
+  func testDoctorReportsManagedInAppUpdatePolicy() throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let defaults = try makeUpdatePolicyDefaults()
+    defaults.set(true, forKey: updatesDisabledPreferenceKey)
+    let server = makeServer(root: root, updatePolicyDefaults: defaults)
+
+    let payload = server.doctorPayload()
+    let broker = try XCTUnwrap(payload["broker"] as? [String: Any])
+    let updates = try XCTUnwrap(broker["inAppUpdates"] as? [String: Any])
+
+    XCTAssertEqual(updates["updatesDisabled"] as? Bool, true)
+    XCTAssertEqual(updates["managedDisableKey"] as? String, updatesDisabledPreferenceKey)
+  }
+
+  func testManagedUpdatesDefaultToEnabledWhenPreferenceUnset() throws {
+    let defaults = try makeUpdatePolicyDefaults()
+
+    XCTAssertEqual(managedUpdatesDisabled(defaults: defaults), false)
+  }
+
+  func testRunStartsUpdateRuntimeAndPersistsState() throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let updateRuntime = StubUpdateRuntime(state: .starting)
+    let server = makeServer(root: root, updateRuntime: updateRuntime)
+
+    try FileManager.default.createDirectory(
+      at: root,
+      withIntermediateDirectories: true,
+      attributes: nil
+    )
+    try server.writeStatus(extra: [
+      "serviceStatus": "running",
+    ].merging(server.startUpdateRuntimeStatus(), uniquingKeysWith: { _, new in new }))
+
+    let data = try Data(contentsOf: makePaths(root).statusPath)
+    let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+    XCTAssertEqual(updateRuntime.startCount, 1)
+    XCTAssertEqual(payload["updateRuntimeState"] as? String, "starting")
   }
 
   // MARK: - AuthenticationServices broker routing (issue #13)

@@ -99,6 +99,27 @@ fn write_fallback_provider_config(home: &Path, provider_path: &str) {
     .expect("failed to write config");
 }
 
+fn write_supported_domains_config(home: &Path, domains: &[&str]) {
+    let config = serde_json::json!({
+        "schema": 1,
+        "port": 10_000,
+        "host": "127.0.0.1",
+        "username": "",
+        "sharedKey": "",
+        "runtimeMode": "auto",
+        "secretSource": "file",
+        "supportedDomains": domains,
+        "createdAt": Utc::now().to_rfc3339(),
+    });
+
+    fs::create_dir_all(home.join(".apw")).expect("failed to create config directory");
+    fs::write(
+        home.join(".apw/config.json"),
+        serde_json::to_vec_pretty(&config).expect("failed to serialize config"),
+    )
+    .expect("failed to write config");
+}
+
 fn write_bitwarden_provider(path: &Path) {
     fs::write(
         path,
@@ -186,6 +207,33 @@ fn threat_model_documents_current_v2_security_boundary() {
         posture.contains("threat-model drift checks"),
         "security posture should list the threat-model drift regression"
     );
+}
+
+#[test]
+#[serial]
+fn doctor_ci_reports_unreachable_supported_domain_from_config() {
+    with_temp_home(|home| {
+        env::remove_var("APW_AASA_DOMAINS");
+        write_supported_domains_config(home, &["definitely-not-a-real-host.invalid"]);
+
+        let (status, stdout, stderr) = run_command(home, &["doctor", "--ci"]);
+
+        assert_eq!(
+            status, 0,
+            "status={status}, stdout={stdout}, stderr={stderr}"
+        );
+        let output = parse_json_output(&stdout);
+        let checks = output["payload"].as_array().expect("expected checks array");
+        let associated_domains = checks
+            .iter()
+            .find(|check| check["name"] == "associated-domains")
+            .expect("expected associated-domains check");
+        assert_eq!(associated_domains["status"], "fail");
+        assert!(associated_domains["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("definitely-not-a-real-host.invalid"));
+    });
 }
 
 #[test]
