@@ -78,6 +78,7 @@ Primary Rust gates:
 cargo fmt --manifest-path rust/Cargo.toml -- --check
 cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path rust/Cargo.toml --all-targets
+bash scripts/ci/run-quality-indicators.sh
 ```
 
 ## Release expectations

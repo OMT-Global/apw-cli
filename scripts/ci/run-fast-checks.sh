@@ -48,6 +48,7 @@ done < <(find .github/scripts scripts -type f -name '*.sh' -print0)
 ./scripts/test-verify-universal-binaries.sh
 ./scripts/test-universal-release-config.sh
 ./scripts/test-notarize-native-app.sh
+./scripts/test-quality-indicators.sh
 ./scripts/test-package-release-dmg.sh
 ./scripts/test-native-automation-config.sh
 

@@ -112,7 +112,13 @@ cargo test --manifest-path rust/Cargo.toml --test native_app_e2e
 ./scripts/ci/validate-appcast-contract.sh
 ./scripts/build-universal-release.sh
 ./scripts/verify-universal-binaries.sh
+bash scripts/ci/run-quality-indicators.sh
 ```
+
+For high-risk changes, enable the deeper optional checks described in
+[QUALITY_GATES.md](QUALITY_GATES.md): `APW_RUN_COVERAGE=1` adds LCOV-backed CRAP
+scores when `cargo-llvm-cov` is installed, and `APW_RUN_MUTATION=1` runs
+`cargo-mutants` when available.
 
 In-app updates must follow the signed Sparkle appcast contract in
 [IN_APP_UPDATES.md](IN_APP_UPDATES.md). Release automation must not publish an
