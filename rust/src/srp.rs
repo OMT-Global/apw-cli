@@ -290,7 +290,7 @@ impl SRPSession {
         let shared_key = self.shared_key.as_ref().ok_or_else(|| {
             APWError::new(
                 Status::InvalidSession,
-                "Missing encryption key. Reauthenticate with `apw auth`.",
+                "Missing encryption key. Use `apw app launch` and `apw login <url>` through the native app broker.",
             )
         })?;
 
@@ -321,7 +321,7 @@ impl SRPSession {
         let shared_key = self.shared_key.as_ref().ok_or_else(|| {
             APWError::new(
                 Status::InvalidSession,
-                "Missing encryption key. Reauthenticate with `apw auth`.",
+                "Missing encryption key. Use `apw app launch` and `apw login <url>` through the native app broker.",
             )
         })?;
 
@@ -356,7 +356,7 @@ impl SRPSession {
         let shared_key = self.shared_key.as_ref().ok_or_else(|| {
             APWError::new(
                 Status::InvalidSession,
-                "Missing encryption key. Reauthenticate with `apw auth`.",
+                "Missing encryption key. Use `apw app launch` and `apw login <url>` through the native app broker.",
             )
         })?;
         let key = shared_key.to_bytes_be();
@@ -403,7 +403,7 @@ impl SRPSession {
         let shared_key = self.shared_key.as_ref().ok_or_else(|| {
             APWError::new(
                 Status::InvalidSession,
-                "Missing encryption key. Reauthenticate with `apw auth`.",
+                "Missing encryption key. Use `apw app launch` and `apw login <url>` through the native app broker.",
             )
         })?;
         if payload.len() <= NONCE_BYTES {

@@ -3,11 +3,13 @@ set -euo pipefail
 
 print_help() {
   cat <<'EOF'
-Usage: ./scripts/build-apw-release.sh [--install|--no-install] [--brew-smoke|--no-brew-smoke]
+Usage: ./scripts/build-apw-release.sh [--universal|--no-universal] [--install|--no-install] [--brew-smoke|--no-brew-smoke]
                                     [--install-dir /usr/local/bin] [--skip-version]
                                     [--archive-smoke|--no-archive-smoke]
 
 Options:
+  --universal           build universal arm64 + x86_64 release binaries (default)
+  --no-universal        build only the host architecture
   --install              install apw to --install-dir (defaults to /usr/local/bin)
   --no-install           skip installation (default)
   --install-dir PATH     destination directory for installation (default /usr/local/bin)
@@ -31,6 +33,7 @@ CARGO_MANIFEST="$ROOT_DIR/rust/Cargo.toml"
 APP_BUNDLE_PATH="$ROOT_DIR/native-app/dist/APW.app"
 VERSION="$(awk -F ' = ' '/^version = / {gsub(/"/, "", $2); print $2; exit}' "$CARGO_MANIFEST")"
 ARCHIVE_PATH="$ROOT_DIR/dist/apw-macos-v${VERSION}.tar.gz"
+UNIVERSAL_BUILD=1
 INSTALL_BIN=0
 INSTALL_DIR="/usr/local/bin"
 BREW_SMOKE=0
@@ -44,6 +47,12 @@ fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --universal)
+      UNIVERSAL_BUILD=1
+      ;;
+    --no-universal)
+      UNIVERSAL_BUILD=0
+      ;;
     --install)
       INSTALL_BIN=1
       ;;
@@ -97,15 +106,19 @@ if [ ! -f "$CARGO_MANIFEST" ]; then
   exit 1
 fi
 
-printf '\n[1/5] Building APW app bundle...\n'
 cd "$ROOT_DIR"
-"$ROOT_DIR/scripts/build-native-app.sh"
+if [ "$UNIVERSAL_BUILD" -eq 1 ]; then
+  printf '\n[release] Building universal release binaries...\n'
+  "$ROOT_DIR/scripts/build-universal-release.sh"
+else
+  printf '\n[release] Building APW app bundle...\n'
+  "$ROOT_DIR/scripts/build-native-app.sh"
 
-printf '\n[2/5] Building release binary...\n'
-cd "$ROOT_DIR"
-cargo build --manifest-path "$CARGO_MANIFEST" --release
+  printf '\n[release] Building release binary...\n'
+  cargo build --manifest-path "$CARGO_MANIFEST" --release
+fi
 
-printf '\n[3/5] Packaging release archive...\n'
+printf '\n[release] Packaging release archive...\n'
 rm -rf "$ROOT_DIR/dist/apw" "$ROOT_DIR/dist/APW.app"
 mkdir -p "$ROOT_DIR/dist"
 cp "$BIN_PATH" "$ROOT_DIR/dist/apw"
@@ -115,13 +128,18 @@ rm -rf "$ROOT_DIR/dist/apw" "$ROOT_DIR/dist/APW.app"
 echo "Created: $ARCHIVE_PATH"
 
 if [ "$SKIP_VERSION_CHECK" -ne 1 ]; then
-  printf '\n[4/5] Validating binary health...\n'
+  printf '\n[release] Validating binary health...\n'
   "$BIN_PATH" --version
   "$BIN_PATH" status --json
 fi
 
+if [ "$UNIVERSAL_BUILD" -eq 1 ]; then
+  printf '\n[release] Validating universal binary slices...\n'
+  "$ROOT_DIR/scripts/verify-universal-binaries.sh" "$BIN_PATH" "$APP_BUNDLE_PATH/Contents/MacOS/APW"
+fi
+
 if [ "$ARCHIVE_SMOKE" -eq 1 ]; then
-  printf '\n[5/5] Validating release archive smoke...\n'
+  printf '\n[release] Validating release archive smoke...\n'
   smoke_dir="$(mktemp -d)"
   smoke_home="$(mktemp -d)"
   cleanup_smoke() {

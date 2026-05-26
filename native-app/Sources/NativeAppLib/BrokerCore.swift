@@ -390,7 +390,10 @@ final class BrokerServer {
       )
     case "login":
       let url = request.payload?["url"] ?? ""
-      return try loginResponse(for: url, requestId: request.requestId)
+      return try loginResponse(for: url, requestId: request.requestId, intent: "login")
+    case "fill":
+      let url = request.payload?["url"] ?? ""
+      return try loginResponse(for: url, requestId: request.requestId, intent: "fill")
     default:
       return ResponseEnvelope(
         ok: false,
@@ -435,7 +438,11 @@ final class BrokerServer {
     ]
   }
 
-  private func loginResponse(for rawURL: String, requestId: String?) throws -> ResponseEnvelope {
+  private func loginResponse(
+    for rawURL: String,
+    requestId: String?,
+    intent: String
+  ) throws -> ResponseEnvelope {
     guard let url = URL(string: rawURL), let host = url.host?.lowercased(), !host.isEmpty else {
       return ResponseEnvelope(
         ok: false,
@@ -474,6 +481,7 @@ final class BrokerServer {
             "password": AnyCodable(credential.password),
             "transport": AnyCodable("authentication_services"),
             "userMediated": AnyCodable(true),
+            "intent": AnyCodable(intent),
           ],
           error: nil,
           requestId: requestId
@@ -541,6 +549,7 @@ final class BrokerServer {
         "password": AnyCodable(credential.password),
         "transport": AnyCodable("unix_socket"),
         "userMediated": AnyCodable(true),
+        "intent": AnyCodable(intent),
       ],
       error: nil,
       requestId: requestId

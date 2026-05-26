@@ -44,13 +44,10 @@ jobs:
           cargo test --manifest-path rust/Cargo.toml --test legacy_parity
           cargo test --manifest-path rust/Cargo.toml --test security_regressions
 
-      - name: Build release binary
-        run: cargo build --manifest-path rust/Cargo.toml --release
-
-      - name: Build native app bundle
+      - name: Build universal release binaries
         env:
           APW_SPARKLE_PUBLIC_ED_KEY: ${{ vars.APW_SPARKLE_PUBLIC_ED_KEY || '' }}
-        run: ./scripts/build-native-app.sh
+        run: ./scripts/build-universal-release.sh
 
       - name: Build local source tarball for Homebrew smoke
         id: source_tarball
@@ -105,6 +102,16 @@ jobs:
         env:
           APW_SPARKLE_PUBLIC_ED_KEY: ${{ vars.APW_SPARKLE_PUBLIC_ED_KEY || '' }}
         run: ./scripts/build-native-app.sh
+
+      - name: Sign and notarize native app bundle
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          APPLE_DEVELOPER_CERT_P12: ${{ secrets.APPLE_DEVELOPER_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_KEY_ISSUER: ${{ secrets.APPLE_NOTARY_KEY_ISSUER }}
+          APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
+        run: bash scripts/notarize-native-app.sh
 
       - name: Homebrew smoke install from source tarball
         env:
@@ -176,6 +183,9 @@ jobs:
           cp dist/sparkle-updates/appcast.xml dist/appcast.xml
           echo "available=true" >> "$GITHUB_OUTPUT"
 
+      - name: Package release DMG
+        run: ./scripts/package-release-dmg.sh "${GITHUB_REF_NAME}"
+
       - name: Validate release archive contents
         run: |
           archive="dist/apw-macos-${GITHUB_REF_NAME}.tar.gz"
@@ -184,10 +194,26 @@ jobs:
           tar -tzf "$archive" | grep -qx 'APW.app/Contents/Info.plist'
           tar -tzf "$archive" | grep -qx 'APW.app/Contents/MacOS/APW'
 
+      - name: Validate universal release binaries
+        run: ./scripts/verify-universal-binaries.sh
+
+      - name: Validate release DMG checksum
+        run: |
+          dmg="dist/apw-macos-${GITHUB_REF_NAME}.dmg"
+          test -f "$dmg"
+          test -f "$dmg.sha256"
+          (
+            cd dist
+            shasum -a 256 -c "apw-macos-${GITHUB_REF_NAME}.dmg.sha256"
+          )
+
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/apw-macos-${{ github.ref_name }}.tar.gz
+          files: |
+            dist/apw-macos-${{ github.ref_name }}.tar.gz
+            dist/apw-macos-${{ github.ref_name }}.dmg
+            dist/apw-macos-${{ github.ref_name }}.dmg.sha256
 
       - name: Publish Sparkle appcast assets
         if: steps.sparkle_appcast.outputs.available == 'true'

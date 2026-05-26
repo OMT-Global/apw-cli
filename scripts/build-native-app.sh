@@ -13,8 +13,33 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 PLIST_PATH="$CONTENTS_DIR/Info.plist"
 EXECUTABLE_PATH="$PACKAGE_DIR/.build/release/$EXECUTABLE_NAME"
+UNIVERSAL=0
 VERSION="$(awk -F ' = ' '$1 == "version" { gsub(/"/, "", $2); print $2; exit }' "$ROOT_DIR/rust/Cargo.toml")"
 PLIST_RENDERER="$ROOT_DIR/scripts/render-native-app-info-plist.sh"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --universal)
+      UNIVERSAL=1
+      ;;
+    -h|--help)
+      cat <<'HELP'
+Usage: ./scripts/build-native-app.sh [--universal]
+
+Build native-app/dist/APW.app.
+
+Options:
+  --universal  Build APW.app as a universal arm64 + x86_64 bundle.
+HELP
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+  shift
+done
 
 if [[ -z "$VERSION" ]]; then
   echo "Unable to determine APW version from rust/Cargo.toml" >&2
@@ -26,14 +51,19 @@ if [[ ! -x "$PLIST_RENDERER" ]]; then
   exit 1
 fi
 
-swift build --package-path "$PACKAGE_DIR" -c release
+if [[ "$UNIVERSAL" -eq 1 ]]; then
+  swift build --package-path "$PACKAGE_DIR" -c release --arch arm64 --arch x86_64
+  EXECUTABLE_PATH="$PACKAGE_DIR/.build/apple/Products/Release/$EXECUTABLE_NAME"
+else
+  swift build --package-path "$PACKAGE_DIR" -c release
+fi
 
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$EXECUTABLE_PATH" "$MACOS_DIR/$EXECUTABLE_NAME"
 chmod 0755 "$MACOS_DIR/$EXECUTABLE_NAME"
 
-RESOURCE_BUNDLE="$(find "$PACKAGE_DIR/.build" -path '*/release/*.bundle' -type d -name '*NativeAppLib*.bundle' | head -n 1 || true)"
+RESOURCE_BUNDLE="$(find "$PACKAGE_DIR/.build" \( -path '*/release/*.bundle' -o -path '*/Release/*.bundle' \) -type d -name '*NativeAppLib*.bundle' | head -n 1 || true)"
 if [[ -n "$RESOURCE_BUNDLE" ]]; then
   cp -R "$RESOURCE_BUNDLE" "$RESOURCES_DIR/$(basename "$RESOURCE_BUNDLE")"
 fi

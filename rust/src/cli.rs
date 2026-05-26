@@ -1,70 +1,13 @@
 use crate::client::ApplePasswordManager;
-use crate::daemon::{start_daemon, DaemonOptions};
 use crate::error::APWError;
 use crate::host::{native_host_doctor, native_host_install, native_host_uninstall};
 use crate::logging::{self, LogLevel};
 use crate::native_app::{
     native_app_doctor, native_app_fill, native_app_install, native_app_launch, native_app_login,
 };
-use crate::types::{
-    Payload, RuntimeMode, Status, BUILD_DATE, BUILD_TARGET, GIT_SHA, RUST_VERSION, VERSION,
-};
-use crate::utils::{bigint_to_base64, read_bigint};
+use crate::types::{Status, BUILD_DATE, BUILD_TARGET, GIT_SHA, RUST_VERSION, VERSION};
 use clap::{Args, Parser, Subcommand};
-use rpassword::prompt_password;
 use serde_json::json;
-use std::io::{self, Write};
-
-const LEGACY_DAEMON_DEPRECATION_WARNING: &str = "This command uses the legacy daemon path and will be removed in v2.1.0. Use the native app broker flow instead; see docs/MIGRATION_AND_PARITY.md.";
-
-fn read_prompt(prompt: &str) -> Result<String, APWError> {
-    print!("{prompt}");
-    io::stdout().flush().map_err(|error| {
-        APWError::new(
-            Status::GenericError,
-            format!("Failed to print prompt: {error}"),
-        )
-    })?;
-
-    let mut value = String::new();
-    io::stdin().read_line(&mut value).map_err(|error| {
-        APWError::new(
-            Status::GenericError,
-            format!("Failed to read input: {error}"),
-        )
-    })?;
-
-    Ok(value.trim().to_string())
-}
-
-fn normalize_pin(value: String) -> Result<String, APWError> {
-    if !value.chars().all(|c| c.is_ascii_digit()) || value.len() != 6 {
-        return Err(APWError::new(
-            Status::InvalidParam,
-            "PIN must be exactly 6 digits.",
-        ));
-    }
-    Ok(value)
-}
-
-fn is_valid_host(host: &str) -> bool {
-    !host.trim().is_empty() && !host.contains('\0') && !host.contains(' ')
-}
-
-fn parse_host(raw: &str) -> Result<String, APWError> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(APWError::new(Status::InvalidParam, "Missing host."));
-    }
-    if !is_valid_host(trimmed) {
-        return Err(APWError::new(Status::InvalidParam, "Invalid host."));
-    }
-    Ok(trimmed.to_string())
-}
-
-fn parse_host_arg(raw: &str) -> std::result::Result<String, String> {
-    parse_host(raw).map_err(|error| error.message)
-}
 
 fn sanitize_url(raw: &str) -> Result<String, APWError> {
     let trimmed = raw.trim();
@@ -128,94 +71,8 @@ fn print_output(payload: &serde_json::Value, status: Status, json_output: bool) 
     }
 }
 
-fn print_entries(payload: &Payload, json_output: bool) -> Result<(), APWError> {
-    if payload.status != Status::Success {
-        return Err(APWError::new(
-            payload.status,
-            crate::types::status_text(payload.status),
-        ));
-    }
-
-    let entries = payload
-        .entries
-        .iter()
-        .filter_map(|entry| {
-            if let Some(username) = entry.get("USR").and_then(serde_json::Value::as_str) {
-                let domain = entry
-                    .get("sites")
-                    .and_then(serde_json::Value::as_array)
-                    .and_then(|sites| sites.first())
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("");
-                let password = entry
-                    .get("PWD")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("Not Included");
-                return Some(serde_json::json!({
-                  "username": username,
-                  "domain": domain,
-                  "password": password,
-                }));
-            }
-
-            if let Some(username) = entry.get("username").and_then(serde_json::Value::as_str) {
-                let code = entry
-                    .get("code")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("Not Included");
-                let domain = entry
-                    .get("domain")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("");
-                return Some(serde_json::json!({
-                  "username": username,
-                  "domain": domain,
-                  "code": code,
-                }));
-            }
-
-            None
-        })
-        .collect::<Vec<_>>();
-
-    let mapped = json!({
-      "results": entries,
-      "status": "ok",
-    });
-    print_output(&mapped, Status::Success, json_output);
-    Ok(())
-}
-
 fn print_status(payload: serde_json::Value, json_output: bool) {
     print_output(&payload, Status::Success, json_output);
-}
-
-fn warn_legacy_daemon_path(command: &str) {
-    logging::warn(command, LEGACY_DAEMON_DEPRECATION_WARNING);
-}
-
-fn parse_pin_prompt(optional: Option<String>) -> Result<String, APWError> {
-    if let Some(pin) = optional {
-        return normalize_pin(pin);
-    }
-    normalize_pin(prompt_password("Enter PIN: ").map_err(|error| {
-        APWError::new(Status::GenericError, format!("Failed to read PIN: {error}"))
-    })?)
-}
-
-fn ask_pw_action() -> Result<PwAction, APWError> {
-    let selected = read_prompt("Choose action:\n  1) list accounts\n  2) get password\n> ")?;
-    let lowered = selected.trim().to_lowercase();
-    if lowered == "1" || lowered == "list" || lowered == "list accounts" {
-        Ok(PwAction::List { url: String::new() })
-    } else if lowered == "2" || lowered == "get" || lowered == "get password" {
-        Ok(PwAction::Get {
-            url: String::new(),
-            username: None,
-        })
-    } else {
-        Err(APWError::new(Status::InvalidParam, "Invalid action."))
-    }
 }
 
 #[derive(Parser)]
@@ -238,22 +95,10 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     App(AppCommand),
-    #[command(
-        long_about = "This command uses the legacy daemon path and will be removed in v2.1.0. Use the native app broker flow instead; see docs/MIGRATION_AND_PARITY.md."
-    )]
-    Auth(AuthCommand),
     Doctor(DoctorCommand),
     Fill(FillCommand),
     Host(HostCommand),
     Login(LoginCommand),
-    #[command(
-        long_about = "This command uses the legacy daemon path and will be removed in v2.1.0. Use `apw login <url>` through the native app broker instead; see docs/MIGRATION_AND_PARITY.md."
-    )]
-    Pw(PwCommand),
-    #[command(
-        long_about = "This command starts the legacy daemon path and will be removed in v2.1.0. Use `apw app launch` for the native app broker instead; see docs/MIGRATION_AND_PARITY.md."
-    )]
-    Start(StartCommand),
     Status(StatusCommand),
     Version(VersionCommand),
 }
@@ -275,8 +120,15 @@ pub struct DoctorCommand {
     /// Emit only the structured environment-check array. Useful for CI
     /// jobs that want to grep `[FAIL]` lines or parse the JSON shape.
     /// See issue #12.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "bundle")]
     pub ci: bool,
+    /// Write a redacted diagnostic bundle (tar.gz) to the given path so
+    /// it can be attached to support requests. The bundle excludes
+    /// credentials.json, config.json, broker logs, and environment
+    /// variables, and aborts if any included field looks like a token.
+    /// See issue #56.
+    #[arg(long, value_name = "PATH")]
+    pub bundle: Option<std::path::PathBuf>,
 }
 
 #[derive(Args)]
@@ -292,38 +144,6 @@ pub struct LoginCommand {
 #[derive(Args)]
 pub struct FillCommand {
     pub url: String,
-}
-
-#[derive(Args)]
-#[command(
-    long_about = "DEPRECATED: `apw auth` is part of the legacy daemon path and will be removed in v2.1.0. See docs/MIGRATION_AND_PARITY.md."
-)]
-pub struct AuthCommand {
-    #[command(subcommand)]
-    pub command: Option<AuthSubcommand>,
-    #[arg(short, long)]
-    pub pin: Option<String>,
-}
-
-#[derive(Subcommand)]
-pub enum AuthSubcommand {
-    Logout,
-    Request,
-    Response(AuthResponseArgs),
-}
-
-#[derive(Args)]
-pub struct AuthResponseArgs {
-    #[arg(short, long)]
-    pub pin: String,
-    #[arg(short, long)]
-    pub salt: String,
-    #[arg(long = "server_key", alias = "serverKey")]
-    pub server_key: String,
-    #[arg(long = "client_key", short, alias = "clientKey")]
-    pub client_key: String,
-    #[arg(short, long)]
-    pub username: String,
 }
 
 #[derive(Args)]
@@ -346,47 +166,6 @@ pub struct HostDoctorArgs {
 }
 
 #[derive(Args)]
-#[command(
-    long_about = "DEPRECATED: `apw pw` is part of the legacy daemon path and will be removed in v2.1.0. Use `apw login`/`apw fill` for the v2 broker. See docs/MIGRATION_AND_PARITY.md."
-)]
-pub struct PwCommand {
-    #[command(subcommand)]
-    pub action: Option<PwAction>,
-}
-
-#[derive(Subcommand)]
-pub enum PwAction {
-    Get {
-        #[arg(value_name = "url")]
-        url: String,
-        username: Option<String>,
-    },
-    List {
-        url: String,
-    },
-}
-
-#[derive(Args)]
-#[command(
-    long_about = "DEPRECATED: `apw start` launches the legacy WebSocket daemon and will be removed in v2.1.0. The v2 broker runs as a per-user app under `apw app launch`. See docs/MIGRATION_AND_PARITY.md."
-)]
-pub struct StartCommand {
-    #[arg(short, long, default_value_t = 0)]
-    pub port: u16,
-    #[arg(
-        short,
-        long,
-        default_value = "127.0.0.1",
-        value_parser = parse_host_arg
-    )]
-    pub bind: String,
-    #[arg(short = 'm', long, default_value = "auto", value_parser = parse_runtime_mode)]
-    pub runtime_mode: RuntimeMode,
-    #[arg(long)]
-    pub dry_run: bool,
-}
-
-#[derive(Args)]
 pub struct StatusCommand {
     #[arg(long)]
     pub json: bool,
@@ -398,13 +177,10 @@ pub struct VersionCommand {}
 pub async fn run(mut manager: ApplePasswordManager, cli: Cli) -> Result<(), APWError> {
     match cli.command {
         Commands::App(args) => run_app(args, cli.json),
-        Commands::Auth(args) => run_auth(&mut manager, args, cli.json),
         Commands::Doctor(args) => run_doctor(args, cli.json),
         Commands::Fill(args) => run_fill(args, cli.json),
         Commands::Host(args) => run_host(args, cli.json),
         Commands::Login(args) => run_login(args, cli.json),
-        Commands::Pw(args) => run_pw(&mut manager, args, cli.json),
-        Commands::Start(args) => run_start(args).await,
         Commands::Status(args) => run_status(&mut manager, args, cli.json),
         Commands::Version(args) => run_version(args, cli.json),
     }
@@ -439,7 +215,27 @@ fn run_doctor(args: DoctorCommand, cli_json: bool) -> Result<(), APWError> {
 
     let mut payload = native_app_doctor()?;
     if let Some(object) = payload.as_object_mut() {
-        object.insert("environment".to_string(), environment_json);
+        object.insert("environment".to_string(), environment_json.clone());
+    }
+
+    if let Some(bundle_path) = args.bundle.as_deref() {
+        let result =
+            crate::bundle::write_diagnostic_bundle(bundle_path, &payload, &environment_json)?;
+        let summary = serde_json::json!({
+            "bundlePath": result.path,
+            "filesIncluded": result.files_included,
+            "redactionChecks": result.redaction_checks,
+        });
+        if !cli_json {
+            eprintln!(
+                "Wrote diagnostic bundle to {} ({} files, {} redaction checks).",
+                result.path.display(),
+                result.files_included.len(),
+                result.redaction_checks
+            );
+        }
+        print_output(&summary, Status::Success, cli_json);
+        return Ok(());
     }
 
     if !cli_json {
@@ -499,48 +295,6 @@ fn run_version(_args: VersionCommand, cli_json: bool) -> Result<(), APWError> {
     Ok(())
 }
 
-fn run_auth(
-    manager: &mut ApplePasswordManager,
-    args: AuthCommand,
-    cli_json: bool,
-) -> Result<(), APWError> {
-    warn_legacy_daemon_path("auth");
-    let result = match args.command {
-        Some(AuthSubcommand::Logout) => {
-            manager.logout()?;
-            serde_json::json!({"status": "logged out"})
-        }
-        Some(AuthSubcommand::Request) => {
-            manager.request_challenge()?;
-            let values = manager.session.return_values();
-            serde_json::json!({
-              "salt": bigint_to_base64(&values.salt.unwrap_or_default()),
-              "serverKey": bigint_to_base64(&values.server_public_key.unwrap_or_default()),
-              "username": values.username.unwrap_or_default(),
-              "clientKey": bigint_to_base64(&values.client_private_key.unwrap_or_default()),
-            })
-        }
-        Some(AuthSubcommand::Response(options)) => {
-            let salt = read_bigint(&options.salt)?;
-            let server_key = read_bigint(&options.server_key)?;
-            let client_key = read_bigint(&options.client_key)?;
-            manager.set_session_for_response(options.username, client_key, server_key, salt);
-            let pin = normalize_pin(options.pin)?;
-            manager.verify_challenge(pin)?;
-            serde_json::json!({"status": "ok"})
-        }
-        None => {
-            let pin = parse_pin_prompt(args.pin)?;
-            manager.request_challenge()?;
-            manager.verify_challenge(pin)?;
-            serde_json::json!({"status": "ok"})
-        }
-    };
-
-    print_output(&result, Status::Success, cli_json);
-    Ok(())
-}
-
 fn run_host(args: HostCommand, cli_json: bool) -> Result<(), APWError> {
     match args.command {
         HostSubcommand::Install => {
@@ -558,59 +312,6 @@ fn run_host(args: HostCommand, cli_json: bool) -> Result<(), APWError> {
     }
 
     Ok(())
-}
-
-fn run_pw(
-    manager: &mut ApplePasswordManager,
-    args: PwCommand,
-    cli_json: bool,
-) -> Result<(), APWError> {
-    warn_legacy_daemon_path("pw");
-    match args.action {
-        Some(PwAction::Get { url, username }) => {
-            let payload = manager.get_password_for_url(
-                &sanitize_url(&url)?,
-                username.unwrap_or_default().as_str(),
-            )?;
-            print_entries(&payload, cli_json)
-        }
-        Some(PwAction::List { url }) => {
-            let payload = manager.get_login_names_for_url(&sanitize_url(&url)?)?;
-            print_entries(&payload, cli_json)
-        }
-        None => {
-            let action = ask_pw_action()?;
-            let url = sanitize_url(&read_prompt("Enter URL: ")?)?;
-            match action {
-                PwAction::Get { .. } => {
-                    let username = read_prompt("Enter username (optional): ")?;
-                    let payload = manager.get_password_for_url(&url, username.as_str())?;
-                    print_entries(&payload, cli_json)
-                }
-                PwAction::List { .. } => {
-                    let payload = manager.get_login_names_for_url(&url)?;
-                    print_entries(&payload, cli_json)
-                }
-            }
-        }
-    }
-}
-
-async fn run_start(args: StartCommand) -> Result<(), APWError> {
-    warn_legacy_daemon_path("start");
-    logging::info(
-        "daemon",
-        format!("starting daemon on {}:{}", args.bind, args.port),
-    );
-    let host = parse_host(&args.bind)?;
-    let port = args.port;
-    start_daemon(DaemonOptions {
-        port,
-        host,
-        runtime_mode: args.runtime_mode,
-        dry_run: args.dry_run,
-    })
-    .await
 }
 
 fn version_payload() -> Result<serde_json::Value, APWError> {
@@ -701,52 +402,11 @@ fn validate_semver_identifiers(
     Ok(())
 }
 
-fn parse_runtime_mode(raw: &str) -> std::result::Result<RuntimeMode, String> {
-    let normalized = raw.trim().to_lowercase();
-    Ok(match normalized.as_str() {
-        "auto" => RuntimeMode::Auto,
-        "native" => RuntimeMode::Native,
-        "browser" => RuntimeMode::Browser,
-        "direct" => RuntimeMode::Direct,
-        "launchd" => RuntimeMode::Launchd,
-        "disabled" => RuntimeMode::Disabled,
-        _ => {
-            return Err(
-                "runtime mode must be one of auto|native|browser|direct|launchd|disabled."
-                    .to_string(),
-            );
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::{CommandFactory, Parser};
     use rand::{thread_rng, Rng};
-
-    #[test]
-    fn host_validation_rejects_spaces() {
-        assert!(is_valid_host("localhost"));
-        assert!(!is_valid_host("local host"));
-        assert!(!is_valid_host("   "));
-        assert!(!is_valid_host("a\0b"));
-    }
-
-    #[test]
-    fn parse_host_requires_value() {
-        assert!(parse_host("127.0.0.1").is_ok());
-        assert!(parse_host("   ").is_err());
-        assert!(parse_host("bad host").is_err());
-    }
-
-    #[test]
-    fn pin_normalization_is_strict() {
-        assert_eq!(normalize_pin("123456".to_string()).unwrap(), "123456");
-        assert!(normalize_pin("12345".to_string()).is_err());
-        assert!(normalize_pin("12ab56".to_string()).is_err());
-        assert!(normalize_pin(" 123456 ".to_string()).is_err());
-    }
 
     #[test]
     fn parse_url_is_optional_https_default() {
@@ -782,26 +442,14 @@ mod tests {
     }
 
     #[test]
-    fn legacy_daemon_help_mentions_deprecation() {
+    fn legacy_daemon_commands_are_removed_from_help() {
         let mut command = Cli::command();
-        for name in ["auth", "pw", "start"] {
-            let help = command
-                .find_subcommand_mut(name)
-                .expect("legacy subcommand")
-                .render_long_help()
-                .to_string();
-            assert!(help.contains("legacy daemon path"), "{name} help: {help}");
-            assert!(help.contains("v2.1.0"), "{name} help: {help}");
+        for name in ["auth", "pw", "otp", "start"] {
+            assert!(
+                command.find_subcommand_mut(name).is_none(),
+                "removed legacy subcommand still appears in help: {name}"
+            );
         }
-    }
-
-    #[test]
-    fn otp_subcommand_is_removed() {
-        let Err(error) = Cli::try_parse_from(["apw", "otp", "list", "example.com"]) else {
-            panic!("expected removed otp subcommand to be rejected");
-        };
-        let rendered = error.to_string();
-        assert!(rendered.contains("unrecognized subcommand 'otp'"));
     }
 
     #[test]
@@ -896,135 +544,23 @@ mod tests {
     }
 
     #[test]
-    fn start_command_rejects_invalid_bind_host() {
-        assert!(
-            Cli::try_parse_from(["apw", "start", "--bind", "bad host", "--port", "5000"]).is_err()
-        );
-    }
-
-    #[test]
-    fn start_command_rejects_invalid_port() {
-        assert!(
-            Cli::try_parse_from(["apw", "start", "--bind", "127.0.0.1", "--port", "bad"]).is_err()
-        );
-    }
-
-    #[test]
     fn parse_status_global_json_defaults_to_status_json() {
         let parsed = Cli::try_parse_from(["apw", "--json", "status"]).unwrap();
         assert!(parsed.json);
     }
 
     #[test]
-    fn auth_response_command_requires_expected_fields() {
-        let parsed = Cli::try_parse_from([
-            "apw",
-            "auth",
-            "response",
-            "--pin",
-            "123456",
-            "--salt",
-            "AQ==",
-            "--server_key",
-            "Ag==",
-            "--client_key",
-            "Aw==",
-            "--username",
-            "alice",
-        ])
-        .unwrap();
-        match parsed.command {
-            Commands::Auth(auth) => match auth.command {
-                Some(AuthSubcommand::Response(_)) => {}
-                _ => panic!("expected auth response command"),
-            },
-            _ => panic!("expected auth command"),
-        }
-    }
-
-    #[test]
-    fn auth_response_command_accepts_camel_case_keys() {
-        let parsed = Cli::try_parse_from([
-            "apw",
-            "auth",
-            "response",
-            "--pin",
-            "123456",
-            "--salt",
-            "AQ==",
-            "--serverKey",
-            "Ag==",
-            "--clientKey",
-            "Aw==",
-            "--username",
-            "alice",
-        ])
-        .unwrap();
-        match parsed.command {
-            Commands::Auth(auth) => match auth.command {
-                Some(AuthSubcommand::Response(response)) => {
-                    assert_eq!(response.server_key, "Ag==");
-                    assert_eq!(response.client_key, "Aw==");
-                }
-                _ => panic!("expected auth response command"),
-            },
-            _ => panic!("expected auth command"),
-        }
-    }
-
-    #[test]
-    fn auth_response_command_accepts_legacy_short_flags() {
-        let parsed = Cli::try_parse_from([
-            "apw",
-            "auth",
-            "response",
-            "-p",
-            "123456",
-            "-s",
-            "AQ==",
-            "--serverKey",
-            "Ag==",
-            "-c",
-            "Aw==",
-            "-u",
-            "alice",
-        ])
-        .unwrap();
-        match parsed.command {
-            Commands::Auth(auth) => match auth.command {
-                Some(AuthSubcommand::Response(response)) => {
-                    assert_eq!(response.pin, "123456");
-                    assert_eq!(response.salt, "AQ==");
-                    assert_eq!(response.server_key, "Ag==");
-                    assert_eq!(response.client_key, "Aw==");
-                    assert_eq!(response.username, "alice");
-                }
-                _ => panic!("expected auth response command"),
-            },
-            _ => panic!("expected auth command"),
-        }
-    }
-
-    #[test]
-    fn start_command_defaults_match_legacy() {
-        let parsed = Cli::try_parse_from(["apw", "start"]).unwrap();
-        match parsed.command {
-            Commands::Start(start) => {
-                assert_eq!(start.port, 0);
-                assert_eq!(start.bind, "127.0.0.1");
-            }
-            _ => panic!("expected start command"),
-        }
-    }
-
-    #[test]
-    fn start_command_accepts_browser_runtime_mode() {
-        let parsed = Cli::try_parse_from(["apw", "start", "--runtime-mode", "browser"]).unwrap();
-        match parsed.command {
-            Commands::Start(start) => {
-                assert_eq!(start.runtime_mode, RuntimeMode::Browser);
-            }
-            _ => panic!("expected start command"),
+    fn legacy_daemon_commands_are_rejected() {
+        for args in [
+            &["apw", "auth"][..],
+            &["apw", "pw", "list", "example.com"][..],
+            &["apw", "otp", "list", "example.com"][..],
+            &["apw", "start"][..],
+        ] {
+            assert!(
+                Cli::try_parse_from(args).is_err(),
+                "removed legacy command unexpectedly parsed: {args:?}"
+            );
         }
     }
 
@@ -1067,17 +603,6 @@ mod tests {
     }
 
     #[test]
-    fn print_entries_rejects_errors() {
-        let payload = Payload {
-            status: Status::NoResults,
-            entries: Vec::new(),
-        };
-        let result = print_entries(&payload, false);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().code, Status::NoResults);
-    }
-
-    #[test]
     fn app_install_command_parses() {
         let parsed = Cli::try_parse_from(["apw", "app", "install"]).unwrap();
         match parsed.command {
@@ -1096,6 +621,18 @@ mod tests {
             Commands::Doctor(_) => {}
             _ => panic!("expected doctor command"),
         }
+    }
+
+    #[test]
+    fn doctor_ci_and_bundle_are_mutually_exclusive() {
+        let parsed = Cli::try_parse_from([
+            "apw",
+            "doctor",
+            "--ci",
+            "--bundle",
+            "/tmp/apw-doctor-bundle.tar.gz",
+        ]);
+        assert!(parsed.is_err());
     }
 
     #[test]

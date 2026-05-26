@@ -33,6 +33,20 @@ private final class StubUpdateRuntime: InAppUpdateRuntime {
   }
 }
 
+private final class RecordingCredentialBroker: CredentialBroker {
+  let outcome: CredentialBrokerResult
+  private(set) var requestedURLs: [String] = []
+
+  init(outcome: CredentialBrokerResult) {
+    self.outcome = outcome
+  }
+
+  func login(url: String) -> CredentialBrokerResult {
+    requestedURLs.append(url)
+    return outcome
+  }
+}
+
 final class BrokerCoreTests: XCTestCase {
   private func makePaths(_ root: URL) -> AppPaths {
     AppPaths(
@@ -358,9 +372,68 @@ final class BrokerCoreTests: XCTestCase {
     XCTAssertEqual(response.ok, true)
     XCTAssertEqual(response.code, 0)
     XCTAssertEqual(response.payload?["transport"]?.value as? String, "authentication_services")
+    XCTAssertEqual(response.payload?["intent"]?.value as? String, "login")
     XCTAssertEqual(response.payload?["username"]?.value as? String, "alice@example.com")
     XCTAssertEqual(response.payload?["domain"]?.value as? String, "vault.example.com")
     XCTAssertEqual(response.payload?["userMediated"]?.value as? Bool, true)
+  }
+
+  func testFillRoutesToCredentialBrokerOnSuccess() throws {
+    unsetenv("APW_DEMO")
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let broker = StubCredentialBroker(
+      outcome: .success(
+        BrokerCredential(
+          domain: "vault.example.com",
+          url: "https://vault.example.com/login",
+          username: "alice@example.com",
+          password: "real-keychain-password"
+        )))
+    let server = makeServer(root: root, credentialBroker: broker)
+
+    let response = try server.dispatch(
+      request: RequestEnvelope(
+        requestId: "fill-ok",
+        command: "fill",
+        payload: ["url": "https://vault.example.com/login"]
+      ))
+
+    XCTAssertEqual(response.ok, true)
+    XCTAssertEqual(response.code, 0)
+    XCTAssertEqual(response.payload?["transport"]?.value as? String, "authentication_services")
+    XCTAssertEqual(response.payload?["intent"]?.value as? String, "fill")
+    XCTAssertEqual(response.payload?["username"]?.value as? String, "alice@example.com")
+    XCTAssertEqual(response.payload?["domain"]?.value as? String, "vault.example.com")
+    XCTAssertEqual(response.payload?["userMediated"]?.value as? Bool, true)
+  }
+
+  func testCredentialBrokerPathDoesNotReadCredentialsFileOutsideDemoMode() throws {
+    unsetenv("APW_DEMO")
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let paths = makePaths(root)
+    try writeCredentials(at: paths.credentialsPath, mode: 0o644)
+    let broker = RecordingCredentialBroker(
+      outcome: .success(
+        BrokerCredential(
+          domain: "vault.example.com",
+          url: "https://vault.example.com",
+          username: "alice@example.com",
+          password: "real-keychain-password"
+        )))
+    let server = makeServer(root: root, credentialBroker: broker)
+
+    let response = try server.dispatch(
+      request: RequestEnvelope(
+        requestId: "non-demo",
+        command: "login",
+        payload: ["url": "https://vault.example.com"]
+      ))
+
+    XCTAssertEqual(response.ok, true)
+    XCTAssertEqual(response.payload?["transport"]?.value as? String, "authentication_services")
+    XCTAssertEqual(broker.requestedURLs, ["https://vault.example.com"])
   }
 
   func testLoginRoutesToCredentialBrokerOnDeny() throws {
@@ -380,6 +453,54 @@ final class BrokerCoreTests: XCTestCase {
     XCTAssertEqual(response.ok, false)
     XCTAssertEqual(response.code, 1)
     XCTAssertEqual(response.error, "User denied the APW login request.")
+  }
+
+  func testFillRoutesCredentialBrokerFailures() throws {
+    struct Scenario {
+      let outcome: CredentialBrokerResult
+      let expectedCode: Int
+      let expectedError: String
+    }
+
+    let scenarios = [
+      Scenario(
+        outcome: .denied,
+        expectedCode: 1,
+        expectedError: "User denied the APW login request."),
+      Scenario(
+        outcome: .failure(.canceled, "ASAuthorizationError canceled"),
+        expectedCode: 1,
+        expectedError: "canceled"),
+      Scenario(
+        outcome: .failure(.notHandled, "ASAuthorizationError notHandled"),
+        expectedCode: 3,
+        expectedError: "notHandled"),
+      Scenario(
+        outcome: .failure(.invalidResponse, "ASAuthorizationError invalidResponse"),
+        expectedCode: 104,
+        expectedError: "invalidResponse"),
+    ]
+
+    for (index, scenario) in scenarios.enumerated() {
+      unsetenv("APW_DEMO")
+      let root = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+      let broker = StubCredentialBroker(outcome: scenario.outcome)
+      let server = makeServer(root: root, credentialBroker: broker)
+
+      let response = try server.dispatch(
+        request: RequestEnvelope(
+          requestId: "fill-failure-\(index)",
+          command: "fill",
+          payload: ["url": "https://vault.example.com/login"]
+        ))
+
+      XCTAssertEqual(response.ok, false, "scenario \(index)")
+      XCTAssertEqual(response.code, scenario.expectedCode, "scenario \(index)")
+      XCTAssertTrue(
+        response.error?.contains(scenario.expectedError) ?? false,
+        "scenario \(index) expected \(scenario.expectedError), got: \(response.error ?? "nil")")
+    }
   }
 
   func testLoginRoutesToCredentialBrokerOnCanceled() throws {

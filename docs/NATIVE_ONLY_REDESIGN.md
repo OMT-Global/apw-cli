@@ -145,11 +145,11 @@ Requirements:
 | `apw auth request` | remove | private-helper flow goes away |
 | `apw auth response` | remove | private-helper flow goes away |
 | `apw pw list` | remove | unsupported as a vault-wide native API contract |
-| `apw pw get <domain> <username>` | deprecate then replace | map to `apw login https://<domain>` |
-| `apw otp list` | removed | no v2 replacement; public Apple APIs do not expose arbitrary CLI retrieval |
-| `apw otp get` | removed | no v2 replacement; public Apple APIs do not expose arbitrary CLI retrieval |
+| `apw pw get <domain> <username>` | remove | use `apw login https://<domain>` |
+| `apw otp list` | remove | unsupported until proven otherwise |
+| `apw otp get` | remove | unsupported until a native verification-code path is proven |
 | `apw status` | keep | report app/XPC/entitlement readiness |
-| `apw start` | remove or repurpose | native app launch replaces daemon start |
+| `apw start` | remove | native app launch replaces daemon start |
 
 ## Implementation phases
 
@@ -215,20 +215,29 @@ Deliverables:
   main thread and bridges results back to the worker thread via
   `DispatchSemaphore`, and a stable `BrokerErrorCode` mapping
   (`canceled` / `failed` / `invalidResponse` / `notHandled` / `unknown`).
-- `BrokerCore.loginResponse` routes through the injected broker when
-  `APW_DEMO` is unset, mapping outcomes onto the existing wire envelope
-  (`transport: "authentication_services"`, `userMediated: true`, integer
-  status codes that match the Rust `Status` enum).
+  SDK-specific and future `ASAuthorizationError` cases are intentionally
+  collapsed into `unknown` unless APW promotes them into a stable wire
+  code.
+- `BrokerCore` routes both `login` and `fill` through the injected broker
+  when `APW_DEMO` is unset, mapping outcomes onto the existing wire
+  envelope (`transport: "authentication_services"`, `userMediated: true`,
+  request `intent`, and integer status codes that match the Rust `Status`
+  enum).
 - `BrokerCoreTests` exercises the broker outcome paths via
-  `StubCredentialBroker` for `success` / `denied` / `canceled` /
-  `invalidResponse`, and asserts the broker error code mapping.
+  `StubCredentialBroker` / `RecordingCredentialBroker` for `login` and
+  `fill` success, denial, cancellation, `notHandled`, `invalidResponse`,
+  the non-demo no-credential-source path, and the rule that
+  `credentials.json` is not read outside `APW_DEMO=1`. The tests also
+  assert the broker error code mapping.
 
 **Phase 3 exit blockers still open**:
 
 - The integration is unverified against a notarized build with
   associated-domain entitlements wired (the macOS build cannot be
-  exercised from CI on Linux). A follow-up validation pass on a real
-  macOS host is required before declaring Phase 3 complete.
+  exercised from CI on Linux). Run
+  `scripts/validate-phase3-hardware.sh` on a real macOS host and attach a
+  completed `docs/phase3-hardware-validation-report.md` before declaring
+  Phase 3 complete.
 - Domain expansion beyond `example.com` is tracked in issue #8.
 
 ### Phase 4: command migration and deprecation
