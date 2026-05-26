@@ -430,12 +430,12 @@ fn normalize_legacy_config(raw: APWConfig) -> APWConfigV1 {
         } else {
             None
         },
+        supported_domains: Vec::new(),
         fallback_provider: None,
         fallback_provider_path: None,
         fallback_provider_database: None,
         fallback_provider_timeout_ms: None,
         fallback_provider_max_invocations: None,
-        supported_domains: Vec::new(),
         disable_demo: None,
         last_launch_status: None,
         last_launch_error: None,
@@ -620,12 +620,12 @@ pub fn read_config_file_or_empty() -> APWConfigV1 {
         bridge_connected_at: None,
         bridge_last_error: None,
         secret_source: Some(SecretSource::File),
+        supported_domains: Vec::new(),
         fallback_provider: None,
         fallback_provider_path: None,
         fallback_provider_database: None,
         fallback_provider_timeout_ms: None,
         fallback_provider_max_invocations: None,
-        supported_domains: Vec::new(),
         disable_demo: None,
         created_at: Utc.timestamp_nanos(0).to_rfc3339(),
     })
@@ -1018,6 +1018,10 @@ pub fn write_config(input: WriteConfigInput) -> Result<APWConfigV1> {
         bridge_connected_at,
         bridge_last_error,
         created_at,
+        supported_domains: existing
+            .as_ref()
+            .map(|value| value.supported_domains.clone())
+            .unwrap_or_default(),
         fallback_provider: existing.as_ref().and_then(|value| value.fallback_provider),
         fallback_provider_path: existing
             .as_ref()
@@ -1031,10 +1035,6 @@ pub fn write_config(input: WriteConfigInput) -> Result<APWConfigV1> {
         fallback_provider_max_invocations: existing
             .as_ref()
             .and_then(|value| value.fallback_provider_max_invocations),
-        supported_domains: existing
-            .as_ref()
-            .map(|value| value.supported_domains.clone())
-            .unwrap_or_default(),
         disable_demo: existing.as_ref().and_then(|value| value.disable_demo),
     };
 
@@ -1500,12 +1500,12 @@ mod tests {
                 username: "alice".to_string(),
                 shared_key: bigint_to_base64(&1u32.into()),
                 secret_source: Some(SecretSource::File),
+                supported_domains: Vec::new(),
                 fallback_provider: None,
                 fallback_provider_path: None,
                 fallback_provider_database: None,
                 fallback_provider_timeout_ms: None,
                 fallback_provider_max_invocations: None,
-                supported_domains: Vec::new(),
                 disable_demo: None,
                 created_at: (chrono::Utc::now() - chrono::Duration::days(40)).to_rfc3339(),
                 runtime_mode: RuntimeMode::Auto,
@@ -1562,12 +1562,12 @@ mod tests {
                 username: "alice".to_string(),
                 shared_key: String::new(),
                 secret_source: Some(SecretSource::Keychain),
+                supported_domains: Vec::new(),
                 fallback_provider: None,
                 fallback_provider_path: None,
                 fallback_provider_database: None,
                 fallback_provider_timeout_ms: None,
                 fallback_provider_max_invocations: None,
-                supported_domains: Vec::new(),
                 disable_demo: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 runtime_mode: RuntimeMode::Auto,
@@ -1641,12 +1641,12 @@ mod tests {
                 username: "alice".to_string(),
                 shared_key: String::new(),
                 secret_source: Some(SecretSource::File),
+                supported_domains: Vec::new(),
                 fallback_provider: None,
                 fallback_provider_path: None,
                 fallback_provider_database: None,
                 fallback_provider_timeout_ms: None,
                 fallback_provider_max_invocations: None,
-                supported_domains: Vec::new(),
                 disable_demo: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 runtime_mode: RuntimeMode::Auto,

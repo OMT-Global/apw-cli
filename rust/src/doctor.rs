@@ -255,6 +255,86 @@ fn check_native_app_bundle() -> DoctorCheck {
     .with_remediation("Run `./scripts/build-native-app.sh`, then `apw app install`.")
 }
 
+fn parse_domain_list(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|domain| !domain.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn configured_associated_domains() -> Vec<String> {
+    if let Ok(raw) = std::env::var("APW_AASA_DOMAINS") {
+        return parse_domain_list(&raw);
+    }
+    crate::utils::configured_supported_domains_non_destructive()
+}
+
+fn parse_http_status(line: &str) -> Option<u16> {
+    let mut parts = line.split_whitespace();
+    let protocol = parts.next()?;
+    if !protocol.starts_with("HTTP/") {
+        return None;
+    }
+    parts.next()?.parse().ok()
+}
+
+fn has_valid_aasa_content_type(headers: &str) -> bool {
+    headers.lines().any(|line| {
+        let Some((name, value)) = line.split_once(':') else {
+            return false;
+        };
+        name.trim().eq_ignore_ascii_case("content-type")
+            && value
+                .trim()
+                .split(';')
+                .next()
+                .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("application/json"))
+    })
+}
+
+fn has_redirect_header(headers: &str) -> bool {
+    headers.lines().any(|line| {
+        line.split_once(':')
+            .is_some_and(|(name, _)| name.trim().eq_ignore_ascii_case("location"))
+    })
+}
+
+fn split_curl_response(response: &str) -> Option<(&str, &str)> {
+    response
+        .split_once("\r\n\r\n")
+        .or_else(|| response.split_once("\n\n"))
+}
+
+fn aasa_response_is_valid(response: &str) -> bool {
+    let Some((headers, body)) = split_curl_response(response) else {
+        return false;
+    };
+    let status = headers.lines().rev().find_map(parse_http_status);
+    if !matches!(status, Some(200..=299)) || has_redirect_header(headers) {
+        return false;
+    }
+    if !has_valid_aasa_content_type(headers) {
+        return false;
+    }
+
+    let Ok(json) = serde_json::from_str::<Value>(body.trim()) else {
+        return false;
+    };
+    json.pointer("/webcredentials/apps")
+        .and_then(Value::as_array)
+        .is_some_and(|apps| {
+            !apps.is_empty()
+                && apps
+                    .iter()
+                    .all(|app| app.as_str().is_some_and(|value| !value.trim().is_empty()))
+        })
+}
+
+/// Probe each configured associated domain for a valid AASA file.
+/// Domains come from `supportedDomains` in `~/.apw/config.json`. The
+/// `APW_AASA_DOMAINS` environment variable remains a comma-separated override
+/// for CI and one-off operator validation. See issue #8.
 fn check_managed_config() -> DoctorCheck {
     let details = crate::utils::config_provenance_details();
     let managed = details
@@ -278,21 +358,8 @@ fn check_managed_config() -> DoctorCheck {
     }
 }
 
-/// Probe each configured associated domain for a reachable AASA file.
-/// `APW_AASA_DOMAINS` remains a comma-separated override for CI probes;
-/// otherwise the check uses user or managed `supportedDomains` config.
 fn check_associated_domains() -> Option<DoctorCheck> {
-    let configured_domains = std::env::var("APW_AASA_DOMAINS")
-        .ok()
-        .map(|raw| {
-            raw.split(',')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_else(crate::utils::configured_supported_domains_non_destructive);
-    let domains: Vec<&str> = configured_domains.iter().map(String::as_str).collect();
+    let domains = configured_associated_domains();
     if domains.is_empty() {
         return None;
     }
@@ -300,10 +367,10 @@ fn check_associated_domains() -> Option<DoctorCheck> {
     let mut failures: Vec<String> = Vec::new();
     for domain in &domains {
         let url = format!("https://{domain}/.well-known/apple-app-site-association");
-        // `curl -fsI` is a small dependency footprint — most macOS / Linux
-        // hosts have it available, and we just need a HEAD probe.
-        let probe = run_probe("curl", &["-fsI", "--max-time", "5", &url]);
-        if probe.is_none() {
+        // `curl` is present on the supported operator hosts. `-D -` lets us
+        // validate headers and body from one bounded request.
+        let probe = run_probe("curl", &["-fsS", "--max-time", "5", "-D", "-", &url]);
+        if !probe.as_deref().is_some_and(aasa_response_is_valid) {
             failures.push(domain.to_string());
         }
     }
@@ -314,7 +381,7 @@ fn check_associated_domains() -> Option<DoctorCheck> {
                 "associated-domains",
                 CheckStatus::Ok,
                 format!(
-                    "AASA files reachable for {} configured domain(s).",
+                    "AASA files valid for {} configured domain(s).",
                     domains.len()
                 ),
             )
@@ -326,12 +393,12 @@ fn check_associated_domains() -> Option<DoctorCheck> {
                 "associated-domains",
                 CheckStatus::Fail,
                 format!(
-                    "AASA file unreachable for: {}",
+                    "AASA file invalid or unreachable for: {}",
                     failures.join(", ")
                 ),
             )
             .with_remediation(
-                "Each domain must serve application/json at /.well-known/apple-app-site-association without redirects. See docs/DOMAIN_EXPANSION.md.",
+                "Each domain must serve application/json at /.well-known/apple-app-site-association without redirects and include webcredentials.apps. See docs/DOMAIN_EXPANSION.md.",
             ),
         )
     }
@@ -384,6 +451,47 @@ pub fn checks_to_json(checks: &[DoctorCheck]) -> Value {
 mod tests {
     use super::*;
     use serial_test::serial;
+    use std::fs;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    fn with_temp_home<F>(run: F)
+    where
+        F: FnOnce(&Path),
+    {
+        let temp = TempDir::new().expect("failed to create temp home");
+        let previous_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", temp.path());
+
+        run(temp.path());
+
+        if let Some(previous_home) = previous_home {
+            std::env::set_var("HOME", previous_home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
+
+    fn write_supported_domains_config(home: &Path, domains: &[&str]) {
+        let config = json!({
+            "schema": 1,
+            "port": 10000,
+            "host": "127.0.0.1",
+            "username": "",
+            "sharedKey": "",
+            "runtimeMode": "auto",
+            "secretSource": "file",
+            "supportedDomains": domains,
+            "createdAt": "2026-05-23T00:00:00Z"
+        });
+        let apw_dir = home.join(".apw");
+        fs::create_dir_all(&apw_dir).expect("failed to create .apw");
+        fs::write(
+            apw_dir.join("config.json"),
+            serde_json::to_vec_pretty(&config).expect("failed to encode config"),
+        )
+        .expect("failed to write config");
+    }
 
     #[test]
     fn check_status_label_is_uppercase() {
@@ -474,8 +582,28 @@ mod tests {
     #[test]
     #[serial]
     fn associated_domains_check_skipped_when_env_unset() {
-        std::env::remove_var("APW_AASA_DOMAINS");
-        assert!(check_associated_domains().is_none());
+        with_temp_home(|_| {
+            std::env::remove_var("APW_AASA_DOMAINS");
+            assert!(check_associated_domains().is_none());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn associated_domains_check_preserves_invalid_config_when_env_unset() {
+        with_temp_home(|home| {
+            std::env::remove_var("APW_AASA_DOMAINS");
+            let apw_dir = home.join(".apw");
+            fs::create_dir_all(&apw_dir).expect("failed to create .apw");
+            let config_path = apw_dir.join("config.json");
+            fs::write(&config_path, "{invalid").expect("failed to write invalid config");
+
+            assert!(check_associated_domains().is_none());
+            assert!(
+                config_path.exists(),
+                "doctor must not clear malformed config"
+            );
+        });
     }
 
     #[test]
@@ -487,6 +615,73 @@ mod tests {
         let check = check_associated_domains().expect("expected an AASA check");
         std::env::remove_var("APW_AASA_DOMAINS");
         assert_eq!(check.status, CheckStatus::Fail);
-        assert!(check.message.contains("unreachable"));
+        assert!(check.message.contains("invalid or unreachable"));
+    }
+
+    #[test]
+    #[serial]
+    fn associated_domains_check_reads_supported_domains_config() {
+        with_temp_home(|home| {
+            std::env::remove_var("APW_AASA_DOMAINS");
+            write_supported_domains_config(home, &["definitely-not-a-real-host.invalid"]);
+
+            let check = check_associated_domains().expect("expected an AASA check");
+
+            assert_eq!(check.status, CheckStatus::Fail);
+            assert!(check.message.contains("definitely-not-a-real-host.invalid"));
+            assert!(check
+                .remediation
+                .unwrap_or_default()
+                .contains("DOMAIN_EXPANSION"));
+        });
+    }
+
+    #[test]
+    fn aasa_response_validation_accepts_json_webcredentials() {
+        let response = concat!(
+            "HTTP/2 200\r\n",
+            "content-type: application/json; charset=utf-8\r\n",
+            "\r\n",
+            r#"{"webcredentials":{"apps":["TEAMID.dev.omt.apw"]}}"#
+        );
+
+        assert!(aasa_response_is_valid(response));
+    }
+
+    #[test]
+    fn aasa_response_validation_rejects_redirects() {
+        let response = concat!(
+            "HTTP/2 302\r\n",
+            "location: https://example.com/aasa.json\r\n",
+            "content-type: application/json\r\n",
+            "\r\n",
+            r#"{"webcredentials":{"apps":["TEAMID.dev.omt.apw"]}}"#
+        );
+
+        assert!(!aasa_response_is_valid(response));
+    }
+
+    #[test]
+    fn aasa_response_validation_rejects_non_json_content_type() {
+        let response = concat!(
+            "HTTP/2 200\r\n",
+            "content-type: text/html\r\n",
+            "\r\n",
+            r#"{"webcredentials":{"apps":["TEAMID.dev.omt.apw"]}}"#
+        );
+
+        assert!(!aasa_response_is_valid(response));
+    }
+
+    #[test]
+    fn aasa_response_validation_rejects_missing_webcredentials_apps() {
+        let response = concat!(
+            "HTTP/2 200\r\n",
+            "content-type: application/json\r\n",
+            "\r\n",
+            r#"{"applinks":{"apps":[]}}"#
+        );
+
+        assert!(!aasa_response_is_valid(response));
     }
 }
