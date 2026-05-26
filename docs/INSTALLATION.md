@@ -91,6 +91,43 @@ listed in `docs/bootstrap/onboarding.md` are configured. If those optional
 secrets are absent, the workflow emits a warning and publishes an unstapled
 archive rather than failing unrelated release automation.
 
+## Install from a release DMG
+
+Release DMGs are named `apw-macos-vX.Y.Z.dmg`. Each release also publishes a
+matching `apw-macos-vX.Y.Z.dmg.sha256` file for checksum verification.
+
+Download both files from the GitHub release, then verify the DMG before opening
+it:
+
+```bash
+shasum -a 256 -c apw-macos-vX.Y.Z.dmg.sha256
+```
+
+Open the DMG and install the app bundle:
+
+```bash
+MOUNT="/Volumes/APW vX.Y.Z"
+hdiutil attach apw-macos-vX.Y.Z.dmg
+install -m 0755 "$MOUNT/bin/apw" /usr/local/bin/apw
+(cd "$MOUNT" && ./bin/apw app install)
+cp -R "$MOUNT/APW.app" /Applications/APW.app
+hdiutil detach "$MOUNT"
+```
+
+Keep the DMG mounted until `apw app install` completes; the installer discovers
+`APW.app` from the mounted volume before copying it into the per-user runtime
+directory. Then run the first-use launch check:
+
+```bash
+apw --version
+apw status --json
+apw app launch
+```
+
+Gatekeeper should accept release DMGs built by the release workflow. If macOS
+blocks the app, stop the install and verify that the release asset was signed
+and notarized before use.
+
 ## Homebrew
 
 APW uses a **formula-plus-app-install** Homebrew model for the v2 line. The
