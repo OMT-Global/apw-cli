@@ -42,5 +42,9 @@ done < <(find .github/scripts scripts -type f -name '*.sh' -print0)
 
 ./scripts/test-render-homebrew-formula.sh
 ./scripts/test-extended-validation-config.sh
+./scripts/test-verify-universal-binaries.sh
+./scripts/test-universal-release-config.sh
+./scripts/test-notarize-native-app.sh
+./scripts/test-package-release-dmg.sh
 
 echo "APW fast checks passed."

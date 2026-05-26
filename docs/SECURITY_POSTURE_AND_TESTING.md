@@ -24,6 +24,16 @@ Release reference version: `v2.0.0`
   invocation, requires an absolute executable path, marks JSON output as
   `transport: "external_cli"` / `securityMode: "reduced_external_cli"`, and does
   not cache returned credentials
+- supported fallback providers are `1password`, `bitwarden`, `keepassxc`, and
+  `pass`; all four reuse the same validated absolute-path execution model
+  (owner-only, no `~`, no relative paths, `0755`-or-tighter mode, bounded
+  output, process-group timeout)
+- the `keepassxc` provider additionally requires `fallbackProviderDatabase`
+  (an absolute `.kdbx` path) and reads the master password from the
+  `APW_KEEPASSXC_PASSWORD` environment variable, feeding it to
+  `keepassxc-cli` over stdin; the password is never written to disk or cached
+- the `pass` provider relies on `gpg-agent` for the unlock, so APW never
+  handles the master key
 
 ### Runtime broker hardening
 
@@ -40,6 +50,10 @@ Release reference version: `v2.0.0`
 - native app UNIX-socket requests use a `3s` read/write timeout
 - a hung broker socket returns a non-zero `CommunicationTimeout` error instead
   of blocking the CLI indefinitely
+- AuthenticationServices returns stable APW broker codes for cancellation,
+  generic failure, invalid response, not-handled, and unknown errors;
+  SDK-specific cases are collapsed into `unknown` until APW explicitly
+  promotes them into the wire contract
 - direct executable fallback runs the APW app bundle under a `5s` wall-clock
   timeout, reads at most the configured maximum response size from each of
   stdout and stderr via bounded pipe reads, and terminates the child (process
@@ -51,6 +65,38 @@ Release reference version: `v2.0.0`
   the doctor command
 - timed-out requests do not cache or persist partially returned credentials
 
+### Diagnostic-bundle export
+
+`apw doctor --bundle <path>` writes a tar.gz that operators can attach to
+support requests. The bundle is deterministic and fails closed rather than
+shipping incompletely-redacted material.
+
+Layout (see `rust/src/bundle.rs` for the source of truth):
+
+```
+apw-doctor-bundle/
+  manifest.json                # bundleVersion, files, redaction guarantees
+  doctor.json                  # full `apw doctor --json` payload
+  environment.json             # `apw doctor --ci` environment checks
+  os.json                      # uname, arch/os, sw_vers on macOS
+  native-app/file-listing.json # path/size/mode for files under ~/.apw/native-app/
+```
+
+Redaction guarantees:
+
+- environment variables are never read or copied into the bundle
+- file contents under `~/.apw/native-app/` are never read — only the metadata
+  listing (relative path, byte size, octal mode, file type) is included
+- `credentials.json`, `config.json`, and `broker.log` are explicitly excluded
+- every string in the bundle JSON is scanned for token-like patterns
+  (long high-entropy alphanumeric runs, common vendor key prefixes, and the
+  in-tree demo password sentinel); a match aborts the bundle with an
+  `InvalidConfig` (102) error and does not write the archive
+- the archive file is written mode `0600`
+
+If an operator needs to share broker logs or config they attach those
+separately, after redacting by hand.
+
 ## Required release gates
 
 Run these before publishing:
@@ -60,9 +106,15 @@ cargo fmt --manifest-path rust/Cargo.toml -- --check
 cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path rust/Cargo.toml --all-targets
 cargo test --manifest-path rust/Cargo.toml --test native_app_e2e
-cargo build --manifest-path rust/Cargo.toml --release
-./scripts/build-native-app.sh
+./scripts/build-universal-release.sh
+./scripts/verify-universal-binaries.sh
 ```
+
+Before claiming Phase 3 complete for a public release, run the real-hardware
+notarized broker validation in
+[PHASE3_HARDWARE_VALIDATION.md](PHASE3_HARDWARE_VALIDATION.md). This check is
+manual because CI cannot prove that the native iCloud Keychain picker appears
+for a notarized app with associated-domain entitlements.
 
 ## Security-focused regression coverage
 
@@ -77,8 +129,15 @@ The Rust test suite covers:
 - native app diagnostics and `APW_DEMO=1` bootstrap credential file initialization
 - end-to-end v2 app install, launch, status, doctor, and login flows
 - direct-exec fallback, unsupported-domain handling, denial handling, and malformed broker response mapping
+- a manual notarized-hardware validation contract for the Phase 3
+  AuthenticationServices broker flow
+- diagnostic-bundle layout, archive permissions, and fail-closed redaction
+  when a plausible credential pattern would otherwise reach the bundle
 - external fallback provider path hardening, including relative paths, `~`, world-writable
   executables, and symlink targets
+- external fallback lookups for `1password`, `bitwarden`, `keepassxc`, and
+  `pass`, including KeePassXC master-password stdin feeding and the typed
+  errors for missing config, missing database, and missing entries
 - diagnostic-bundle redaction and fail-closed aborts when staged diagnostics look
   credential-like
 - threat-model drift checks so retired UDP/browser-helper/private-helper
@@ -95,6 +154,9 @@ The native app Swift test suite covers:
 - localized approval prompt copy for APW-owned UI
 - accessibility labels for the credential approval window and buttons
 - broker envelope parsing, permission checks, denial handling, and typed AuthenticationServices fallback errors
+- AuthenticationServices broker routing for `login` and `fill` success and
+  failure cases via injected test brokers, including the guarantee that
+  `credentials.json` is not consulted unless `APW_DEMO=1`
 
 ## Accessibility and localization audit
 

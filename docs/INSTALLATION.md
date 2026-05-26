@@ -29,6 +29,14 @@ The resulting binary is:
 rust/target/release/apw
 ```
 
+To build release-equivalent macOS artifacts from source, including universal
+`arm64` and `x86_64` slices for both the CLI and `APW.app`, run:
+
+```bash
+./scripts/build-universal-release.sh
+./scripts/verify-universal-binaries.sh
+```
+
 ### Install manually
 
 ```bash
@@ -54,6 +62,16 @@ apw
 APW.app/
 ```
 
+Release archives are built as universal macOS artifacts. Verify the architecture
+slices after extracting an archive with:
+
+```bash
+lipo -archs ./apw
+lipo -archs ./APW.app/Contents/MacOS/APW
+```
+
+Both commands must include `arm64` and `x86_64`.
+
 Extract the archive and keep `apw` beside `APW.app` while installing the
 per-user app bundle:
 
@@ -66,6 +84,49 @@ tar -xzf apw-macos-vX.Y.Z.tar.gz
 
 After `apw app install`, the CLI copies `APW.app` into
 `~/.apw/native-app/installed/APW.app`.
+
+Tagged release archives are signed and notarized by
+`.github/workflows/release.yml` when the Apple Developer ID and notary secrets
+listed in `docs/bootstrap/onboarding.md` are configured. If those optional
+secrets are absent, the workflow emits a warning and publishes an unstapled
+archive rather than failing unrelated release automation.
+
+## Install from a release DMG
+
+Release DMGs are named `apw-macos-vX.Y.Z.dmg`. Each release also publishes a
+matching `apw-macos-vX.Y.Z.dmg.sha256` file for checksum verification.
+
+Download both files from the GitHub release, then verify the DMG before opening
+it:
+
+```bash
+shasum -a 256 -c apw-macos-vX.Y.Z.dmg.sha256
+```
+
+Open the DMG and install the app bundle:
+
+```bash
+MOUNT="/Volumes/APW vX.Y.Z"
+hdiutil attach apw-macos-vX.Y.Z.dmg
+install -m 0755 "$MOUNT/bin/apw" /usr/local/bin/apw
+(cd "$MOUNT" && ./bin/apw app install)
+cp -R "$MOUNT/APW.app" /Applications/APW.app
+hdiutil detach "$MOUNT"
+```
+
+Keep the DMG mounted until `apw app install` completes; the installer discovers
+`APW.app` from the mounted volume before copying it into the per-user runtime
+directory. Then run the first-use launch check:
+
+```bash
+apw --version
+apw status --json
+apw app launch
+```
+
+Gatekeeper should accept release DMGs built by the release workflow. If macOS
+blocks the app, stop the install and verify that the release asset was signed
+and notarized before use.
 
 ## Homebrew
 
@@ -150,6 +211,7 @@ Healthy v2 bootstrap state usually looks like:
 
 ```bash
 apw login https://example.com
+apw fill https://example.com
 ```
 
 ### External password manager fallback
@@ -229,8 +291,8 @@ cargo fmt --manifest-path rust/Cargo.toml -- --check
 cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path rust/Cargo.toml --all-targets
 cargo test --manifest-path rust/Cargo.toml --test native_app_e2e
-cargo build --manifest-path rust/Cargo.toml --release
-./scripts/build-native-app.sh
+./scripts/build-universal-release.sh
+./scripts/verify-universal-binaries.sh
 ```
 
 Optional release helper:

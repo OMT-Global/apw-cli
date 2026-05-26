@@ -4,6 +4,7 @@ Start here for the maintained APW v2 documentation set.
 
 - [Installation and operation](INSTALLATION.md)
 - [Security posture and testing](SECURITY_POSTURE_AND_TESTING.md)
+- [Enterprise deployment](ENTERPRISE.md)
 - [Threat model](THREAT_MODEL.md)
 - [Native migration matrix](NATIVE_MIGRATION.md)
 - [Native-only redesign notes](NATIVE_ONLY_REDESIGN.md)
