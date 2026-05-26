@@ -85,6 +85,12 @@ tar -xzf apw-macos-vX.Y.Z.tar.gz
 After `apw app install`, the CLI copies `APW.app` into
 `~/.apw/native-app/installed/APW.app`.
 
+## In-app updates
+
+APW.app's planned in-app update channel uses a signed Sparkle appcast. The
+contract, managed disable key, security-update marker, and release validation
+requirements are documented in [IN_APP_UPDATES.md](IN_APP_UPDATES.md).
+
 Tagged release archives are signed and notarized by
 `.github/workflows/release.yml` when the Apple Developer ID and notary secrets
 listed in `docs/bootstrap/onboarding.md` are configured. If those optional
@@ -291,6 +297,7 @@ cargo fmt --manifest-path rust/Cargo.toml -- --check
 cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path rust/Cargo.toml --all-targets
 cargo test --manifest-path rust/Cargo.toml --test native_app_e2e
+./scripts/ci/validate-appcast-contract.sh
 ./scripts/build-universal-release.sh
 ./scripts/verify-universal-binaries.sh
 ```

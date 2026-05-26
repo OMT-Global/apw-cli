@@ -170,6 +170,13 @@ pub struct APWConfigV1 {
     pub bridge_last_error: Option<String>,
     #[serde(rename = "secretSource", default)]
     pub secret_source: Option<SecretSource>,
+    #[serde(
+        rename = "supportedDomains",
+        alias = "supported_domains",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub supported_domains: Vec<String>,
     #[serde(rename = "fallbackProvider", alias = "fallback_provider", default)]
     pub fallback_provider: Option<ExternalFallbackProvider>,
     #[serde(
@@ -201,13 +208,6 @@ pub struct APWConfigV1 {
     )]
     pub fallback_provider_max_invocations: Option<u32>,
     #[serde(
-        rename = "supportedDomains",
-        alias = "supported_domains",
-        default,
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub supported_domains: Vec<String>,
-    #[serde(
         rename = "disableDemo",
         alias = "disable_demo",
         default,
@@ -235,12 +235,12 @@ impl Default for APWConfigV1 {
             bridge_connected_at: None,
             bridge_last_error: None,
             secret_source: Some(SecretSource::File),
+            supported_domains: Vec::new(),
             fallback_provider: None,
             fallback_provider_path: None,
             fallback_provider_database: None,
             fallback_provider_timeout_ms: None,
             fallback_provider_max_invocations: None,
-            supported_domains: Vec::new(),
             disable_demo: None,
             created_at: Utc::now().to_rfc3339(),
         }
@@ -325,11 +325,6 @@ pub struct APWRuntimeConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub fallback_provider_max_invocations: Option<u32>,
-    #[serde(
-        rename = "supportedDomains",
-        default,
-        skip_serializing_if = "Vec::is_empty"
-    )]
     pub supported_domains: Vec<String>,
     #[serde(
         rename = "disableDemo",
