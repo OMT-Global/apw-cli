@@ -428,7 +428,7 @@ fn wait_for_status(fixture: &NativeAppFixture) -> Value {
         let status = run_apw(fixture, &["status", "--json"], &[]);
         if status.status == 0 {
             let payload = parse_success(&status);
-            if payload["payload"]["app"]["service"]["running"] == true {
+            if payload["payload"]["service"]["running"] == true {
                 return payload;
             }
         }
@@ -443,7 +443,7 @@ fn wait_for_status(fixture: &NativeAppFixture) -> Value {
 fn wait_for_socket_transport(fixture: &NativeAppFixture) -> Value {
     for _ in 0..20 {
         let payload = wait_for_status(fixture);
-        if payload["payload"]["app"]["service"]["live"]["transport"] == "unix_socket" {
+        if payload["payload"]["service"]["live"]["transport"] == "unix_socket" {
             return payload;
         }
         thread::sleep(Duration::from_millis(200));
@@ -451,7 +451,7 @@ fn wait_for_socket_transport(fixture: &NativeAppFixture) -> Value {
 
     let payload = wait_for_status(fixture);
     assert_eq!(
-        payload["payload"]["app"]["service"]["live"]["transport"], "unix_socket",
+        payload["payload"]["service"]["live"]["transport"], "unix_socket",
         "{payload:#?}"
     );
     payload
@@ -498,12 +498,9 @@ fn app_install_copies_packaged_bundle_and_updates_status() {
         .exists());
 
     let status_payload = wait_for_status(&fixture);
-    assert_eq!(status_payload["payload"]["app"]["installed"], true);
-    assert_eq!(status_payload["payload"]["app"]["bundleVersion"], "2.0.0");
-    assert_eq!(
-        status_payload["payload"]["app"]["service"]["running"],
-        false
-    );
+    assert_eq!(status_payload["payload"]["installed"], true);
+    assert_eq!(status_payload["payload"]["bundleVersion"], "2.0.0");
+    assert_eq!(status_payload["payload"]["service"]["running"], false);
 }
 
 #[test]
@@ -560,13 +557,13 @@ fn launch_status_and_login_work_over_socket() {
     );
 
     let status_payload = wait_for_socket_transport(&fixture);
-    assert_eq!(status_payload["payload"]["app"]["service"]["running"], true);
+    assert_eq!(status_payload["payload"]["service"]["running"], true);
     assert_eq!(
-        status_payload["payload"]["app"]["service"]["live"]["serviceStatus"],
+        status_payload["payload"]["service"]["live"]["serviceStatus"],
         "running"
     );
     assert_eq!(
-        status_payload["payload"]["app"]["service"]["live"]["transport"],
+        status_payload["payload"]["service"]["live"]["transport"],
         "unix_socket"
     );
 

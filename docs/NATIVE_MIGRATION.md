@@ -18,7 +18,7 @@ browser-helper vault reader flow.
 | `apw otp list` | removed in v2.1.0 | no replacement in v2 |
 | `apw otp get <url>` | removed in v2.1.0 | no replacement in v2 |
 | `apw status` | supported | `apw status --json` now reports app/broker readiness |
-| `apw host doctor` | legacy-only | `apw doctor` |
+| `apw host doctor` | archived in v2.1.0 | `apw doctor` |
 | `apw start` | removed in v2.1.0 | `apw app launch` |
 
 ## Bootstrap Flow
