@@ -436,7 +436,6 @@ fn normalize_legacy_config(raw: APWConfig) -> APWConfigV1 {
         fallback_provider_database: None,
         fallback_provider_timeout_ms: None,
         fallback_provider_max_invocations: None,
-        supported_domains: Vec::new(),
         disable_demo: None,
         last_launch_status: None,
         last_launch_error: None,
@@ -524,24 +523,6 @@ pub fn configured_supported_domains_non_destructive() -> Vec<String> {
     if let Some(domains) = read_managed_config().and_then(|managed| managed.supported_domains) {
         return domains;
     }
-    read_user_supported_domains_non_destructive()
-}
-
-fn read_user_supported_domains_non_destructive() -> Vec<String> {
-    let Ok(content) = fs::read_to_string(config_path()) else {
-        return Vec::new();
-    };
-    let Ok(parsed) = serde_json::from_str::<Value>(&content) else {
-        return Vec::new();
-    };
-    serde_json::from_value::<APWConfigV1>(parsed)
-        .ok()
-        .filter(|config| config.schema == CONFIG_SCHEMA)
-        .map(|config| config.supported_domains)
-        .unwrap_or_default()
-}
-
-pub fn configured_supported_domains_non_destructive() -> Vec<String> {
     read_user_supported_domains_non_destructive()
 }
 
@@ -645,7 +626,6 @@ pub fn read_config_file_or_empty() -> APWConfigV1 {
         fallback_provider_database: None,
         fallback_provider_timeout_ms: None,
         fallback_provider_max_invocations: None,
-        supported_domains: Vec::new(),
         disable_demo: None,
         created_at: Utc.timestamp_nanos(0).to_rfc3339(),
     })
@@ -1055,10 +1035,6 @@ pub fn write_config(input: WriteConfigInput) -> Result<APWConfigV1> {
         fallback_provider_max_invocations: existing
             .as_ref()
             .and_then(|value| value.fallback_provider_max_invocations),
-        supported_domains: existing
-            .as_ref()
-            .map(|value| value.supported_domains.clone())
-            .unwrap_or_default(),
         disable_demo: existing.as_ref().and_then(|value| value.disable_demo),
     };
 
@@ -1476,20 +1452,6 @@ mod tests {
 
     #[test]
     #[serial]
-    fn supported_domain_probe_read_preserves_invalid_user_config() {
-        with_temp_home(|| {
-            fs::create_dir_all(config_root()).unwrap();
-            fs::write(config_path_for_test(), "{invalid").unwrap();
-
-            let domains = configured_supported_domains_non_destructive();
-
-            assert!(domains.is_empty());
-            assert!(config_path_for_test().exists());
-        });
-    }
-
-    #[test]
-    #[serial]
     fn read_config_rejects_oversized_payload() {
         with_temp_home(|| {
             fs::create_dir_all(config_root()).unwrap();
@@ -1544,7 +1506,6 @@ mod tests {
                 fallback_provider_database: None,
                 fallback_provider_timeout_ms: None,
                 fallback_provider_max_invocations: None,
-                supported_domains: Vec::new(),
                 disable_demo: None,
                 created_at: (chrono::Utc::now() - chrono::Duration::days(40)).to_rfc3339(),
                 runtime_mode: RuntimeMode::Auto,
@@ -1607,7 +1568,6 @@ mod tests {
                 fallback_provider_database: None,
                 fallback_provider_timeout_ms: None,
                 fallback_provider_max_invocations: None,
-                supported_domains: Vec::new(),
                 disable_demo: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 runtime_mode: RuntimeMode::Auto,
@@ -1687,7 +1647,6 @@ mod tests {
                 fallback_provider_database: None,
                 fallback_provider_timeout_ms: None,
                 fallback_provider_max_invocations: None,
-                supported_domains: Vec::new(),
                 disable_demo: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
                 runtime_mode: RuntimeMode::Auto,
