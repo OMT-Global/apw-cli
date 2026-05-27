@@ -50,6 +50,7 @@ fi
 
 require_tool cargo
 require_tool swift
+require_tool xcodebuild
 
 run_step "Rust native app end-to-end tests" \
   cargo test --manifest-path rust/Cargo.toml --test native_app_e2e
@@ -60,8 +61,8 @@ run_step "Rust security regression tests" \
 run_step "Rust clippy" \
   cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 
-run_step "Swift native app release build" \
-  ./scripts/build-native-app.sh
+run_step "Native app xcodebuild, signing, and entitlement preflight" \
+  bash scripts/ci/run-native-app-preflight.sh
 
 echo
 echo "APW extended validation passed."

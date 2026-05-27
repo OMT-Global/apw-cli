@@ -14,6 +14,7 @@ FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 PLIST_PATH="$CONTENTS_DIR/Info.plist"
 EXECUTABLE_PATH="$PACKAGE_DIR/.build/release/$EXECUTABLE_NAME"
 UNIVERSAL=0
+ENTITLEMENTS_PATH="$PACKAGE_DIR/APW.entitlements"
 VERSION="$(awk -F ' = ' '$1 == "version" { gsub(/"/, "", $2); print $2; exit }' "$ROOT_DIR/rust/Cargo.toml")"
 PLIST_RENDERER="$ROOT_DIR/scripts/render-native-app-info-plist.sh"
 
@@ -91,7 +92,7 @@ fi
 "$PLIST_RENDERER" "$PLIST_PATH" "$VERSION" "$EXECUTABLE_NAME"
 
 if command -v codesign >/dev/null 2>&1; then
-  if ! codesign -s - --force --deep "$APP_DIR" 2>/dev/null; then
+  if ! codesign -s - --force --deep --entitlements "$ENTITLEMENTS_PATH" "$APP_DIR" 2>/dev/null; then
     echo "Warning: ad-hoc code signing failed for $APP_DIR. The bundle may be rejected by Gatekeeper." >&2
   fi
 fi

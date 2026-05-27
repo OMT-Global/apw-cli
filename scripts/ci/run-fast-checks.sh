@@ -51,5 +51,6 @@ done < <(find .github/scripts scripts -type f -name '*.sh' -print0)
 ./scripts/test-quality-indicators.sh
 ./scripts/test-package-release-dmg.sh
 ./scripts/test-native-automation-config.sh
+./scripts/test-native-app-preflight-config.sh
 
 echo "APW fast checks passed."

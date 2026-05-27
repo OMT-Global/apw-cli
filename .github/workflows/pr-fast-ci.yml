@@ -89,8 +89,14 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Run native app Swift tests
-        run: swift test --package-path native-app
+      - name: Run native app xcodebuild tests
+        working-directory: native-app
+        run: >-
+          xcodebuild
+          -scheme APW-Package
+          -destination 'platform=macOS'
+          -derivedDataPath .xcode-derived
+          test
 
   validate-secrets:
     name: Validate Secrets

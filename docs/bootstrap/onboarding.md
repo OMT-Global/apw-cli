@@ -42,6 +42,7 @@
     - Keep PR checks cheap. Add heavy validation to `scripts/ci/run-extended-validation.sh` instead of the PR lane.
     - APW extended validation requires both Rust (`cargo`) and the macOS Swift toolchain, so the `extended-checks` job must run on the org macOS self-hosted pool (`[self-hosted, private, macOS, ARM64, xcode]`) rather than the Synology shell-only pool.
     - Rust builds OpenSSL through the `openssl` crate's vendored feature, so the macOS runner needs source-build tools (`cc`, `make`, and `perl`) but does not require Homebrew, pkg-config, or a system OpenSSL prefix.
+    - Extended validation runs `scripts/ci/run-native-app-preflight.sh`, which exercises the Swift package through `xcodebuild`, builds `APW.app`, verifies codesign, and confirms the associated-domain entitlement is embedded.
 
     ## Release Prep
 

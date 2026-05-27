@@ -38,7 +38,7 @@ expand beyond the shipped entitlement.
 
 ## Step 2: extend the app entitlement
 
-Edit `native-app/Sources/NativeApp/APW.entitlements` and add one
+Edit `native-app/APW.entitlements` and add one
 `webcredentials:<domain>` entry per target domain inside the
 `com.apple.developer.associated-domains` array. Example:
 
