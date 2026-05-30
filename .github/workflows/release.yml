@@ -105,6 +105,7 @@ jobs:
       - name: Sign and notarize native app bundle
         if: startsWith(github.ref, 'refs/tags/v')
         env:
+          APW_NOTARIZE_REQUIRED: "1"
           APPLE_DEVELOPER_CERT_P12: ${{ secrets.APPLE_DEVELOPER_CERT_P12 }}
           APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}

@@ -17,6 +17,11 @@ required_log="$tmp_dir/notary-required.log"
 optional_log="$tmp_dir/notary-optional.log"
 dry_run_log="$tmp_dir/notary-dry-run.log"
 
+grep -q "APW_NOTARIZE_REQUIRED: \"1\"" "$ROOT_DIR/.github/workflows/release.yml" || {
+  echo "release workflow must require notarization for tagged releases." >&2
+  exit 1
+}
+
 if APW_NOTARIZE_REQUIRED=1 APW_APP_BUNDLE_PATH="$fake_app" "$ROOT_DIR/scripts/notarize-native-app.sh" >"$required_log" 2>&1; then
   echo "notarize-native-app accepted missing required credentials." >&2
   exit 1
