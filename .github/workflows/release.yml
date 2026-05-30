@@ -43,6 +43,24 @@ jobs:
           cargo test --manifest-path rust/Cargo.toml
           cargo test --manifest-path rust/Cargo.toml --test security_regressions
 
+      - name: Validate tagged Sparkle release configuration
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          APW_SPARKLE_PUBLIC_ED_KEY: ${{ vars.APW_SPARKLE_PUBLIC_ED_KEY || '' }}
+          SPARKLE_GENERATE_APPCAST: ${{ vars.SPARKLE_GENERATE_APPCAST || '' }}
+        run: |
+          missing=()
+          if [ -z "$APW_SPARKLE_PUBLIC_ED_KEY" ]; then
+            missing+=("APW_SPARKLE_PUBLIC_ED_KEY")
+          fi
+          if [ -z "$SPARKLE_GENERATE_APPCAST" ]; then
+            missing+=("SPARKLE_GENERATE_APPCAST")
+          fi
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "Sparkle release configuration is incomplete; missing: ${missing[*]}" >&2
+            exit 1
+          fi
+
       - name: Build universal release binaries
         env:
           APW_SPARKLE_PUBLIC_ED_KEY: ${{ vars.APW_SPARKLE_PUBLIC_ED_KEY || '' }}
@@ -159,9 +177,8 @@ jobs:
           SPARKLE_GENERATE_APPCAST: ${{ vars.SPARKLE_GENERATE_APPCAST || '' }}
         run: |
           if [ -z "$SPARKLE_GENERATE_APPCAST" ]; then
-            echo "::warning::SPARKLE_GENERATE_APPCAST is not configured; skipping Sparkle appcast publication."
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "SPARKLE_GENERATE_APPCAST is required for tagged releases." >&2
+            exit 1
           fi
 
           app_zip="dist/APW.app-${GITHUB_REF_NAME}.zip"

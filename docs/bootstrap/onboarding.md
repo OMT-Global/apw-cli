@@ -62,12 +62,19 @@
     | `APPLE_NOTARY_PRIVATE_KEY`   | base64-encoded `.p8` private key for `notarytool`              |
     | `HOMEBREW_TAP_TOKEN`         | scoped `contents:write` token on the tap repo (issue #6)       |
 
+    | Variable                    | Purpose                                                        |
+    | --------------------------- | -------------------------------------------------------------- |
+    | `APW_SPARKLE_PUBLIC_ED_KEY` | Sparkle EdDSA public key rendered into APW.app                  |
+    | `SPARKLE_GENERATE_APPCAST`  | path to Sparkle's `generate_appcast` executable on the runner   |
+
     On tagged releases, `scripts/notarize-native-app.sh` imports the Developer
     ID certificate into a temporary keychain, signs the release CLI and
     `APW.app`, submits the app bundle to Apple notary service, staples the
     ticket, and verifies Gatekeeper assessment before the archive is packaged.
     Tagged releases set `APW_NOTARIZE_REQUIRED=1`, so missing Apple credentials
-    fail the release before artifacts are published. The Homebrew tap job is
+    fail the release before artifacts are published. Tagged releases also
+    require the Sparkle variables above so release automation can publish a
+    signed appcast and configure APW.app to trust it. The Homebrew tap job is
     `continue-on-error` so a missing or rejected token does not block the
     release.
 
