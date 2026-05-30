@@ -25,7 +25,7 @@ defaults:
 jobs:
   changes:
     name: Detect Extended Validation Scope
-    runs-on: ubuntu-latest
+    runs-on: ['self-hosted', 'linux', 'shell-only', 'public']
     outputs:
       app: ${{ steps.preset.outputs.app || steps.filter.outputs.app || 'false' }}
       ci: ${{ steps.preset.outputs.ci || steps.filter.outputs.ci || 'false' }}
@@ -77,7 +77,7 @@ jobs:
 
   fast-checks:
     name: Fast Checks
-    runs-on: ubuntu-latest
+    runs-on: ['self-hosted', 'linux', 'shell-only', 'public']
     timeout-minutes: 15
     needs: changes
     if: needs.changes.outputs.app == 'true' || needs.changes.outputs.ci == 'true'
@@ -111,7 +111,7 @@ jobs:
 
   validate-secrets:
     name: Validate Secrets
-    runs-on: ubuntu-latest
+    runs-on: ['self-hosted', 'linux', 'shell-only', 'public']
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -120,7 +120,7 @@ jobs:
 
   extended-validation-gate:
     name: Extended Validation Gate
-    runs-on: ubuntu-latest
+    runs-on: ['self-hosted', 'linux', 'shell-only', 'public']
     if: always()
     needs:
       - changes
