@@ -1,34 +1,42 @@
 # APW CLI Vision
 
-Version: 0.1
+Version: 0.2
 
-APW CLI is a focused command-line tool for agent and operator workflows that need reliable local execution, native-host awareness, and clear security boundaries.
+APW is a macOS-first command-line entrypoint plus local app broker for user-mediated credential access. The active v2 product is not a vault scraper and not a browser-helper parity project. It is a signed native macOS broker, controlled by the `apw` CLI, that uses supported Apple APIs and explicit local IPC to help a user fill or log in to a site.
 
-It should make common APW operations scriptable, inspectable, and safe to run repeatedly.
+The installed command remains `apw`, but the product contract has changed: `apw login`, `apw fill`, `apw status`, `apw doctor`, `apw app install`, and `apw app launch` are the supported direction. Legacy `auth`, `pw`, `otp`, daemon, and browser-helper behavior remains archived for migration and audit reference.
 
 ## Who It Serves
 
-- Operators managing local APW workflows.
-- Agents repairing issues, checking state, and producing PRs.
-- Contributors who need a small CLI surface with strong tests and explicit host assumptions.
+- macOS users who want a scriptable way to request Apple Passwords-backed sign-in without exposing a general vault reader.
+- Operators building and validating universal CLI plus `APW.app` release artifacts.
+- Contributors hardening the broker, diagnostics, packaging, and migration boundary.
+
+## Current Product Boundary
+
+- Supported platform: macOS.
+- Supported runtime: Rust CLI plus local native app broker over same-user UNIX socket.
+- Supported credential path: app-mediated `AuthenticationServices` flows and explicitly configured reduced-security external fallback.
+- Unsupported direction: arbitrary password listing, arbitrary OTP retrieval, private Apple browser-helper coupling, and non-macOS degraded operation.
 
 ## Product Principles
 
-- CLI behavior should be deterministic and easy to test.
-- Native-host limitations should be reported plainly.
-- Security review findings should become durable checks where possible.
-- Shell portability matters on macOS.
-- Every command should explain failure well enough for an agent to take the next step.
+- Prefer public Apple frameworks over private helper paths, even when that narrows parity.
+- User mediation is a security feature; APW should not silently become a background vault extraction tool.
+- Every broker request and response should use typed, bounded JSON envelopes with stable machine-readable errors.
+- Diagnostics should fail closed, redact aggressively, and be safe to attach to support requests.
+- Release trust belongs in standard macOS mechanisms: signed universal binaries, notarization, Sparkle appcasts, and Homebrew formula validation.
 
 ## Near-Term Direction
 
-- Keep open PRs moving by resolving requested changes and stale labels.
-- Strengthen local checks around security-sensitive paths.
-- Reduce native-host ambiguity in command output and docs.
-- Maintain concise issue-backed slices.
+- Finish the v2 native-only cutover and keep the command migration matrix honest.
+- Harden `apw doctor`, diagnostic bundles, broker timeout behavior, and native app readiness reporting.
+- Wire Sparkle update metadata only with real signing material and release automation secrets.
+- Keep legacy code available for parity audits while making the active CLI/app path smaller and clearer.
 
 ## Non-Goals
 
-- Do not grow the CLI into an unbounded workflow framework.
-- Do not rely on GNU-only shell behavior.
-- Do not treat read-only diagnosis as completed issue work.
+- Do not promise full iCloud Keychain vault or OTP listing through the CLI.
+- Do not preserve browser-extension or private-helper behavior as the long-term product shape.
+- Do not cache credentials returned through external fallback providers.
+- Do not ship placeholder update trust material or unsigned release paths.
