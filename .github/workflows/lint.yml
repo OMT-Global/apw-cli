@@ -5,9 +5,7 @@ on:
 
 jobs:
   lint:
-    # Hosted fallback: the Synology shell-only pool does not provide a C toolchain,
-    # and apt-based provisioning is blocked by container permissions.
-    runs-on: ubuntu-latest
+    runs-on: ['self-hosted', 'linux', 'shell-only', 'public']
 
     steps:
       - uses: actions/checkout@v5
