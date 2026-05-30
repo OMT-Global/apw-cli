@@ -66,8 +66,8 @@
     ID certificate into a temporary keychain, signs the release CLI and
     `APW.app`, submits the app bundle to Apple notary service, staples the
     ticket, and verifies Gatekeeper assessment before the archive is packaged.
-    All Apple credentials are optional — when absent, the workflow emits a
-    `::warning::` and continues without notarization. The Homebrew tap job is
+    Tagged releases set `APW_NOTARIZE_REQUIRED=1`, so missing Apple credentials
+    fail the release before artifacts are published. The Homebrew tap job is
     `continue-on-error` so a missing or rejected token does not block the
     release.
 

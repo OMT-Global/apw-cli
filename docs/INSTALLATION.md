@@ -92,10 +92,10 @@ contract, managed disable key, security-update marker, and release validation
 requirements are documented in [IN_APP_UPDATES.md](IN_APP_UPDATES.md).
 
 Tagged release archives are signed and notarized by
-`.github/workflows/release.yml` when the Apple Developer ID and notary secrets
-listed in `docs/bootstrap/onboarding.md` are configured. If those optional
-secrets are absent, the workflow emits a warning and publishes an unstapled
-archive rather than failing unrelated release automation.
+`.github/workflows/release.yml`. Tagged releases set
+`APW_NOTARIZE_REQUIRED=1`, so the workflow fails before publishing release
+artifacts when the Apple Developer ID or notary secrets listed in
+`docs/bootstrap/onboarding.md` are missing.
 
 ## Install from a release DMG
 
