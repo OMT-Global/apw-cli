@@ -62,6 +62,7 @@ require_pattern "$DOC_PATH" "prepare-sparkle-appcast\\.sh" "release appcast prep
 require_pattern "$DOC_PATH" "generate_appcast" "Sparkle appcast generation tool"
 require_pattern "$DOC_PATH" "SPARKLE_GENERATE_APPCAST" "release runner generate_appcast configuration"
 require_pattern "$DOC_PATH" "APW_SPARKLE_PUBLIC_ED_KEY" "release runner Sparkle public key configuration"
+require_pattern "$DOC_PATH" "fails before publishing" "tagged release fails without Sparkle config"
 require_pattern "$DOC_PATH" "SPUStandardUpdaterController" "runtime Sparkle updater controller"
 
 require_pattern "$TEMPLATE_PATH" "xmlns:sparkle=\"http://www\\.andymatuschak\\.org/xml-namespaces/sparkle\"" "Sparkle namespace"
@@ -120,6 +121,7 @@ require_pattern "$BUILD_NATIVE_APP" "@loader_path/\\.\\./Frameworks" "native app
 require_pattern "$RELEASE_WORKFLOW" "prepare-sparkle-appcast\\.sh" "release appcast preparation step"
 require_pattern "$RELEASE_WORKFLOW" "SPARKLE_GENERATE_APPCAST" "release appcast generator variable"
 require_pattern "$RELEASE_WORKFLOW" "APW_SPARKLE_PUBLIC_ED_KEY" "release Sparkle public key variable"
+require_pattern "$RELEASE_WORKFLOW" "Sparkle release configuration is incomplete" "tagged release Sparkle config fail-closed gate"
 require_pattern "$RELEASE_WORKFLOW" "dist/appcast\\.xml" "release appcast asset upload"
 require_pattern "$RELEASE_WORKFLOW" "APW\\.app-\\$\\{\\{ github\\.ref_name \\}\\}\\.zip" "release Sparkle app archive upload"
 
