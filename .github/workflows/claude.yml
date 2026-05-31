@@ -32,7 +32,11 @@ jobs:
        contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'), github.event.comment.author_association)) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') &&
        contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'), github.event.review.author_association))
-    runs-on: ubuntu-latest
+    runs-on:
+      - self-hosted
+      - linux
+      - shell-only
+      - public
     timeout-minutes: 30
     permissions:
       contents: write
