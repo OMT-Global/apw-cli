@@ -71,7 +71,7 @@ if [[ -n "$RESOURCE_BUNDLE" ]]; then
 fi
 
 if otool -L "$MACOS_DIR/$EXECUTABLE_NAME" | grep -q '@rpath/Sparkle.framework/'; then
-  SPARKLE_FRAMEWORK="$(find "$PACKAGE_DIR/.build" -path '*/release/Sparkle.framework' -type d | head -n 1 || true)"
+  SPARKLE_FRAMEWORK="$(find "$PACKAGE_DIR/.build" \( -path '*/release/Sparkle.framework' -o -path '*/Release/Sparkle.framework' \) -type d | head -n 1 || true)"
   if [[ -z "$SPARKLE_FRAMEWORK" ]]; then
     echo "APW links Sparkle.framework but SwiftPM did not produce a release framework." >&2
     exit 1

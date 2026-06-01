@@ -115,11 +115,6 @@ jobs:
           ./rust/target/release/apw --version
           ./rust/target/release/apw status --json
 
-      - name: Build native app bundle
-        env:
-          APW_SPARKLE_PUBLIC_ED_KEY: ${{ vars.APW_SPARKLE_PUBLIC_ED_KEY || '' }}
-        run: ./scripts/build-native-app.sh
-
       - name: Sign and notarize native app bundle
         if: startsWith(github.ref, 'refs/tags/v')
         env:
