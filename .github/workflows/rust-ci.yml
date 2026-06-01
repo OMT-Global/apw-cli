@@ -7,7 +7,9 @@ permissions:
 
 jobs:
   test:
-    runs-on: ['self-hosted', 'linux', 'shell-only', 'public']
+    # Hosted fallback: Rust validation builds vendored OpenSSL and needs cc/make.
+    # Move to the public shell-only pool after that image has the toolchain.
+    runs-on: ubuntu-latest
 
     steps:
       - name: Setup repo

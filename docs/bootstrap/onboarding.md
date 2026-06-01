@@ -87,5 +87,5 @@
 
     - First-party Claude web sessions should use `bash scripts/claude-cloud/setup.sh` in `claude.ai/code`.
 - Interactive Claude work is prepared through `.devcontainer/devcontainer.json`.
-- Claude automation lives in `.github/workflows/claude.yml` on the shared self-hosted Linux pool and is intentionally separate from the required PR checks.
+- Claude automation lives in `.github/workflows/claude.yml`, reads `ANTHROPIC_API_KEY`, and has repository write permissions, so it must run on GitHub-hosted runners or a trusted private self-hosted pool instead of the shared public shell-only pool.
 - Finish GitHub-side auth by running `/install-github-app` in Claude Code or adding `ANTHROPIC_API_KEY` as a repo secret.
