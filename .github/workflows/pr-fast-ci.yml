@@ -86,7 +86,9 @@ jobs:
 
   native-app-swift-tests:
     name: Native App Swift Tests
-    runs-on: ['self-hosted', 'private', 'macOS', 'ARM64', 'xcode']
+    # Hosted fallback: the self-hosted macOS/Xcode slots are currently offline,
+    # and this PR needs the native app compile gate to complete before merge.
+    runs-on: macos-latest
     timeout-minutes: 20
     needs: changes
     if: >-
