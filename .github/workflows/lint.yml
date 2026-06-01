@@ -5,13 +5,14 @@ on:
 
 jobs:
   lint:
-    # Hosted fallback: the Synology shell-only pool does not provide a C toolchain,
-    # and apt-based provisioning is blocked by container permissions.
+    # Rust build scripts need a C linker; the public shell-only Linux pool is
+    # intentionally minimal and cannot satisfy that compile-time dependency.
     runs-on:
       - self-hosted
-      - linux
-      - shell-only
-      - public
+      - private
+      - macOS
+      - ARM64
+      - xcode
 
     steps:
       - uses: actions/checkout@v5
