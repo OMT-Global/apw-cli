@@ -7,9 +7,10 @@ permissions:
 
 jobs:
   test:
-    # Rust build scripts need a C linker; the public shell-only Linux pool is
-    # intentionally minimal and cannot satisfy that compile-time dependency.
-    runs-on: ['self-hosted', 'private', 'macOS', 'ARM64', 'xcode']
+    # Rust build scripts need a C linker; run inside the Rust container on the
+    # Docker-capable self-hosted Linux pool instead of the minimal shell-only host.
+    runs-on: ['self-hosted', 'linux', 'docker-capable', 'public']
+    container: rust:1-bookworm
 
     steps:
       - name: Setup repo
