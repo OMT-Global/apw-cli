@@ -32,7 +32,9 @@ jobs:
        contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'), github.event.comment.author_association)) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') &&
        contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'), github.event.review.author_association))
-    runs-on: ubuntu-latest
+    # Claude has write permissions and reads ANTHROPIC_API_KEY, so keep it on a
+    # trusted private runner instead of the public shell-only fleet.
+    runs-on: ['self-hosted', 'private', 'macOS', 'ARM64', 'xcode']
     timeout-minutes: 30
     permissions:
       contents: write
@@ -69,8 +71,9 @@ jobs:
             Use CLAUDE.md and docs/bootstrap/onboarding.md as repo policy context.
             Keep required PR status checks aligned with CI Gate.
             Preserve the split fast and extended validation model.
-            Shell-safe jobs may use `[self-hosted, synology, shell-only, public]`.
-            Docker, service-container, browser, and `container:` jobs stay on GitHub-hosted runners.
+            Shell-safe jobs must use `[self-hosted, linux, shell-only, public]`.
+            Secret-bearing automation must stay on a trusted private runner.
+            Docker, service-container, browser, and `container:` jobs require a dedicated self-hosted pool with matching capability labels.
             Prefer the smallest safe change and add tests for behavior changes.
 
             MANUAL TASK: ${{ github.event.inputs.prompt }}
