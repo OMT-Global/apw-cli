@@ -7,10 +7,10 @@ permissions:
 
 jobs:
   test:
-    # Rust build scripts need a C linker; run inside the Rust container on the
-    # Docker-capable self-hosted Linux pool instead of the minimal shell-only host.
-    runs-on: ['self-hosted', 'linux', 'docker-capable', 'public']
-    container: rust:1-bookworm
+    # Hosted fallback: the self-hosted shell-only Linux pool does not provide a
+    # C toolchain, and the Docker-capable pool currently has an incompatible
+    # Docker client for Actions container jobs.
+    runs-on: ubuntu-latest
 
     steps:
       - name: Setup repo
