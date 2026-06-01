@@ -37,10 +37,10 @@
     ## Runner Policy
 
     - Run `apw --json doctor` first on a new local checkout or self-hosted runner to confirm the Rust, Xcode, secret-scan, signing, and runner-environment diagnostics before extended validation.
-    - Shell-safe jobs may use `[self-hosted, synology, shell-only, public]`.
-    - Docker, service-container, browser, and `container:` workloads stay on GitHub-hosted runners.
+    - Shell-safe jobs must use `[self-hosted, linux, shell-only, public]`.
+    - Docker, service-container, browser, and `container:` workloads require a dedicated self-hosted runner pool with matching capability labels.
     - Keep PR checks cheap. Add heavy validation to `scripts/ci/run-extended-validation.sh` instead of the PR lane.
-    - APW extended validation requires both Rust (`cargo`) and the macOS Swift toolchain, so the `extended-checks` job must run on the org macOS self-hosted pool (`[self-hosted, private, macOS, ARM64, xcode]`) rather than the Synology shell-only pool.
+    - APW extended validation requires both Rust (`cargo`) and the macOS Swift toolchain, so the `extended-checks` job must run on the org macOS self-hosted pool (`[self-hosted, private, macOS, ARM64, xcode]`) rather than the Linux shell-only pool.
     - Rust builds OpenSSL through the `openssl` crate's vendored feature, so the macOS runner needs source-build tools (`cc`, `make`, and `perl`) but does not require Homebrew, pkg-config, or a system OpenSSL prefix.
     - Extended validation runs `scripts/ci/run-native-app-preflight.sh`, which exercises the Swift package through `xcodebuild`, builds `APW.app`, verifies codesign, and confirms the associated-domain entitlement is embedded.
 
@@ -87,5 +87,5 @@
 
     - First-party Claude web sessions should use `bash scripts/claude-cloud/setup.sh` in `claude.ai/code`.
 - Interactive Claude work is prepared through `.devcontainer/devcontainer.json`.
-- GitHub-hosted Claude automation lives in `.github/workflows/claude.yml` and is intentionally separate from the required PR checks.
+- Claude automation lives in `.github/workflows/claude.yml` on the shared self-hosted Linux pool and is intentionally separate from the required PR checks.
 - Finish GitHub-side auth by running `/install-github-app` in Claude Code or adding `ANTHROPIC_API_KEY` as a repo secret.

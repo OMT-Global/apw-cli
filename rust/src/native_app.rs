@@ -492,7 +492,7 @@ fn ci_runner_environment_check() -> Value {
         "WARN",
         "runner_labels",
         "Not running in GitHub Actions; runner labels cannot be verified locally",
-        "In CI, confirm shell-safe jobs use [self-hosted, synology, shell-only, public] and extended macOS validation uses [self-hosted, private, macOS, ARM64, xcode].",
+        "In CI, confirm shell-safe jobs use [self-hosted, linux, shell-only, public] and extended macOS validation uses [self-hosted, private, macOS, ARM64, xcode].",
     )
 }
 
@@ -2006,12 +2006,31 @@ mod tests {
         result
     }
 
+    fn with_ci_env<F, R>(value: Option<&str>, run: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        let previous_value = env::var("CI").ok();
+        if let Some(value) = value {
+            env::set_var("CI", value);
+        } else {
+            env::remove_var("CI");
+        }
+        let result = run();
+        if let Some(value) = previous_value {
+            env::set_var("CI", value);
+        } else {
+            env::remove_var("CI");
+        }
+        result
+    }
+
     #[test]
     #[serial]
     fn doctor_does_not_create_default_credentials_file_without_demo_gate() {
         with_temp_home(|| {
             with_demo_env(None, || {
-                let payload = native_app_doctor().unwrap();
+                let payload = with_ci_env(None, || native_app_doctor().unwrap());
                 assert_eq!(
                     payload["frameworks"]["authenticationServicesLinked"],
                     json!(true)
@@ -2029,6 +2048,19 @@ mod tests {
                         "missing diagnostic {id}: {diagnostics:#?}"
                     );
                 }
+                let runner_labels = diagnostics
+                    .iter()
+                    .find(|entry| entry["id"] == json!("runner_labels"))
+                    .expect("runner labels diagnostic");
+                let remediation = runner_labels["hint"].as_str().unwrap_or("");
+                assert!(
+                    remediation.contains("[self-hosted, linux, shell-only, public]"),
+                    "runner remediation should document the Linux shell-only pool: {remediation}"
+                );
+                assert!(
+                    !remediation.contains("synology"),
+                    "runner remediation should not mention the retired Synology pool: {remediation}"
+                );
                 assert!(diagnostics.iter().all(|entry| entry["status"]
                     .as_str()
                     .map(|status| ["OK", "WARN", "FAIL"].contains(&status))
