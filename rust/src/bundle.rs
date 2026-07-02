@@ -293,6 +293,9 @@ where
         Value::Object(map) => {
             for (key, item) in map {
                 f(key)?;
+                if matches!(key.as_str(), "remediation" | "hint" | "id" | "name") {
+                    continue;
+                }
                 walk_strings(item, f)?;
             }
             Ok(())
@@ -323,6 +326,10 @@ fn looks_secret_like(value: &str) -> bool {
     }
 
     if looks_like_short_or_letter_only_secret(trimmed) {
+        return true;
+    }
+
+    if looks_like_symbol_delimited_secret(trimmed) {
         return true;
     }
 
@@ -415,7 +422,12 @@ fn looks_like_short_or_letter_only_secret(value: &str) -> bool {
         .collect::<std::collections::BTreeSet<_>>()
         .len();
 
-    if compact.len() >= 20 && digit == 0 && alpha == compact.len() && unique_alpha >= 8 {
+    if value.split_whitespace().count() == 1
+        && compact.len() >= 20
+        && digit == 0
+        && alpha == compact.len()
+        && unique_alpha >= 8
+    {
         return true;
     }
 
@@ -437,7 +449,19 @@ fn looks_like_safe_diagnostic_text(value: &str) -> bool {
         return true;
     }
 
+    if looks_like_tool_status_text(value) {
+        return true;
+    }
+
     contains_version_token(value)
+}
+
+fn looks_like_tool_status_text(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains(" is available")
+        || lower.contains("was not found")
+        || lower.contains("not installed")
+        || lower.contains("exited with status")
 }
 
 fn is_path_like(value: &str) -> bool {
@@ -453,9 +477,9 @@ fn is_path_like(value: &str) -> bool {
 }
 
 fn contains_version_token(value: &str) -> bool {
-    value
-        .split_whitespace()
-        .any(|token| is_version_token(token.trim_matches(|c: char| matches!(c, '(' | ')' | ',' | ';'))))
+    value.split_whitespace().any(|token| {
+        is_version_token(token.trim_matches(|c: char| matches!(c, '(' | ')' | ',' | ';')))
+    })
 }
 
 fn is_version_token(token: &str) -> bool {
@@ -487,12 +511,43 @@ fn is_version_token(token: &str) -> bool {
     false
 }
 
+fn looks_like_symbol_delimited_secret(value: &str) -> bool {
+    let chunk_count = value.split_whitespace().count();
+    if chunk_count > 4 {
+        return false;
+    }
+
+    let has_symbol_separator = value
+        .chars()
+        .any(|c| matches!(c, '!' | '#' | '$' | '%' | '&' | '*' | '@'));
+    if !has_symbol_separator {
+        return false;
+    }
+
+    let chunk_like_count = value
+        .split(|c: char| {
+            c.is_ascii_whitespace() || matches!(c, '!' | '#' | '$' | '%' | '&' | '*' | '@')
+        })
+        .filter(|chunk| {
+            let compact: String = chunk
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .collect();
+            compact.len() >= 4
+                && compact.chars().any(|c| c.is_ascii_alphabetic())
+                && compact.chars().any(|c| c.is_ascii_digit())
+        })
+        .count();
+
+    chunk_like_count >= 3
+}
+
 fn looks_like_entropy_secret(value: &str) -> bool {
     let compact: String = value
         .chars()
         .filter(|c| c.is_ascii_alphanumeric())
         .collect();
-    if compact.len() < 20 {
+    if value.split_whitespace().count() != 1 || compact.len() < 28 {
         return false;
     }
 
