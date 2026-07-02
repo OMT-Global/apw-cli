@@ -311,6 +311,10 @@ fn looks_secret_like(value: &str) -> bool {
         return false;
     }
 
+    if looks_like_safe_diagnostic_text(trimmed) {
+        return false;
+    }
+
     // The default demo credential lives in tree as `apw-demo-password`.
     // Treat that as a sentinel so the redaction tests catch any path that
     // accidentally embeds it into a diagnostic payload.
@@ -384,6 +388,17 @@ fn looks_like_short_or_letter_only_secret(value: &str) -> bool {
         return false;
     }
 
+    // Short camelCase or PascalCase identifiers are usually field names,
+    // app paths, or versions rather than credentials.
+    if compact.len() < 20
+        && compact.chars().all(|c| c.is_ascii_alphabetic())
+        && compact.chars().any(|c| c.is_ascii_lowercase())
+        && compact.chars().any(|c| c.is_ascii_uppercase())
+        && !compact.chars().any(|c| c.is_ascii_digit())
+    {
+        return false;
+    }
+
     let token_chars = compact
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '_' | '-'));
@@ -412,6 +427,61 @@ fn looks_like_short_or_letter_only_secret(value: &str) -> bool {
         {
             return true;
         }
+    }
+
+    false
+}
+
+fn looks_like_safe_diagnostic_text(value: &str) -> bool {
+    if is_path_like(value) {
+        return true;
+    }
+
+    contains_version_token(value)
+}
+
+fn is_path_like(value: &str) -> bool {
+    if value.contains("://") {
+        return false;
+    }
+
+    if value.starts_with('/') || value.starts_with('~') {
+        return true;
+    }
+
+    value.contains('/') || value.contains('\\')
+}
+
+fn contains_version_token(value: &str) -> bool {
+    value
+        .split_whitespace()
+        .any(|token| is_version_token(token.trim_matches(|c: char| matches!(c, '(' | ')' | ',' | ';'))))
+}
+
+fn is_version_token(token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+
+    let has_digit = token.chars().any(|c| c.is_ascii_digit());
+    let has_separator = token.chars().any(|c| matches!(c, '.' | '-'));
+    if !has_digit || !has_separator {
+        return false;
+    }
+
+    if token.contains('.') {
+        return token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+    }
+
+    let starts_with_digit = token.chars().next().is_some_and(|c| c.is_ascii_digit());
+    let has_letter = token.chars().any(|c| c.is_ascii_alphabetic());
+    let hyphen_count = token.chars().filter(|c| *c == '-').count();
+    if starts_with_digit && !has_letter && hyphen_count >= 2 {
+        return token
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '-' | '_'));
     }
 
     false
