@@ -292,9 +292,11 @@ where
         }
         Value::Object(map) => {
             for (key, item) in map {
-                f(key)?;
                 if matches!(key.as_str(), "remediation" | "hint" | "id" | "name") {
                     continue;
+                }
+                if !looks_like_structural_json_key(key) {
+                    f(key)?;
                 }
                 walk_strings(item, f)?;
             }
@@ -449,11 +451,71 @@ fn looks_like_safe_diagnostic_text(value: &str) -> bool {
         return true;
     }
 
+    if matches!(
+        value.to_ascii_lowercase().as_str(),
+        "1password" | "bitwarden" | "keepassxc" | "pass"
+    ) {
+        return true;
+    }
+
+    let lower = value.to_ascii_lowercase();
+    if lower.starts_with("provider")
+        || lower.contains("fallback provider")
+        || lower.contains("external fallback provider")
+        || lower.contains("providerpath")
+        || lower.contains("providertimeout")
+        || lower.contains("providermaxinvocations")
+        || lower.contains("requires")
+        || lower.contains("associated domains")
+        || lower.contains("associated")
+        || lower.contains("supported domains")
+    {
+        return true;
+    }
+
+    if matches!(
+        value,
+        "fallbackProvider"
+            | "fallbackProviderPath"
+            | "fallbackProviderTimeoutMs"
+            | "fallbackProviderMaxInvocations"
+            | "supportedDomains"
+            | "disableDemo"
+            | "bundleVersion"
+            | "bundlePath"
+            | "createdAt"
+            | "redactionGuarantees"
+            | "redactionChecks"
+            | "filesIncluded"
+    ) {
+        return true;
+    }
+
     if looks_like_tool_status_text(value) {
         return true;
     }
 
     contains_version_token(value)
+}
+
+fn looks_like_structural_json_key(key: &str) -> bool {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if !trimmed.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return false;
+    }
+    if trimmed.len() < 4 {
+        return false;
+    }
+    if matches!(
+        trimmed.to_ascii_lowercase().as_str(),
+        "password" | "secret" | "token" | "apikey" | "apiKey" | "key"
+    ) {
+        return false;
+    }
+    trimmed.chars().any(|c| c.is_ascii_uppercase())
 }
 
 fn looks_like_tool_status_text(value: &str) -> bool {
@@ -821,6 +883,10 @@ mod tests {
         assert!(!looks_secret_like("aarch64-apple-darwin"));
         assert!(!looks_secret_like("2026-05-21T13:16:39Z"));
         assert!(!looks_secret_like("rustc 1.94.1 (e408947bf 2026-03-25)"));
+        assert!(!looks_secret_like("1password"));
+        assert!(!looks_secret_like("bitwarden"));
+        assert!(!looks_secret_like("fallbackProvider"));
+        assert!(!looks_secret_like("fallbackProviderPath"));
         assert!(!looks_secret_like(""));
         assert!(!looks_secret_like("OK"));
         assert!(!looks_secret_like(
