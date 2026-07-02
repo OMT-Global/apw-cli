@@ -376,10 +376,7 @@ fn looks_like_short_or_letter_only_secret(value: &str) -> bool {
         return true;
     }
 
-    let compact: String = value
-        .chars()
-        .filter(|c| !c.is_ascii_whitespace())
-        .collect();
+    let compact: String = value.chars().filter(|c| !c.is_ascii_whitespace()).collect();
     if compact.eq_ignore_ascii_case("hunter2") {
         return true;
     }
@@ -674,15 +671,21 @@ mod tests {
     fn looks_secret_like_flags_short_or_letter_only_secrets() {
         assert!(looks_secret_like("password"));
         assert!(looks_secret_like("CorrectHorseBatteryStaple"));
-        assert!(looks_secret_like("this string contains SuperSecretPassphrase words"));
+        assert!(looks_secret_like(
+            "this string contains SuperSecretPassphrase words"
+        ));
         assert!(looks_secret_like("hunter2"));
         assert!(looks_secret_like("mZ7k!Qp2 xT9v#Rs4 nH6c$Jd8"));
     }
 
     #[test]
     fn looks_secret_like_does_not_flag_normal_sentence_prose() {
-        assert!(!looks_secret_like("Native app credential requests require https URLs."));
-        assert!(!looks_secret_like("Run apw doctor --bundle to capture diagnostics."));
+        assert!(!looks_secret_like(
+            "Native app credential requests require https URLs."
+        ));
+        assert!(!looks_secret_like(
+            "Run apw doctor --bundle to capture diagnostics."
+        ));
     }
 
     #[test]
