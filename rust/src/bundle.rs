@@ -318,6 +318,10 @@ fn looks_secret_like(value: &str) -> bool {
         return true;
     }
 
+    if looks_like_short_or_letter_only_secret(trimmed) {
+        return true;
+    }
+
     // High-entropy fixed-length tokens that fit common API key shapes.
     // We restrict to runs of pure base64/hex characters so paths and
     // version strings ("aarch64-apple-darwin", "2026-05-21T13:16:39Z")
@@ -360,6 +364,72 @@ fn looks_secret_like(value: &str) -> bool {
     }
 
     false
+}
+
+fn looks_like_short_or_letter_only_secret(value: &str) -> bool {
+    let has_password_keyword = matches_secret_keyword(value);
+    if has_password_keyword {
+        return true;
+    }
+
+    let compact: String = value
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect();
+    if compact.eq_ignore_ascii_case("hunter2") {
+        return true;
+    }
+    if compact.len() < 8 {
+        return false;
+    }
+
+    let token_chars = compact
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '_' | '-'));
+    if !token_chars {
+        return false;
+    }
+
+    let alpha = compact.chars().filter(|c| c.is_ascii_alphabetic()).count();
+    let digit = compact.chars().filter(|c| c.is_ascii_digit()).count();
+    let unique_alpha = compact
+        .chars()
+        .filter(|c| c.is_ascii_alphabetic())
+        .map(|c| c.to_ascii_lowercase())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+
+    if compact.len() >= 20 && digit == 0 && alpha == compact.len() && unique_alpha >= 8 {
+        return true;
+    }
+
+    if compact.len() < 32 && alpha + digit == compact.len() {
+        let alpha_ratio = alpha as f64 / compact.len() as f64;
+        let digit_ratio = digit as f64 / compact.len() as f64;
+        if (alpha_ratio >= 0.6 && digit_ratio > 0.0)
+            || (alpha_ratio == 1.0 && compact.chars().any(|c| c.is_ascii_uppercase()))
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn matches_secret_keyword(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    const KEYWORDS: &[&str] = &[
+        "password",
+        "passphrase",
+        "secret",
+        "token",
+        "bearer",
+        "api key",
+        "apikey",
+        "passcode",
+        "pin",
+    ];
+    KEYWORDS.iter().any(|keyword| lower.contains(keyword))
 }
 
 fn summarize_suspicious(value: &str) -> String {
@@ -548,6 +618,20 @@ mod tests {
         ));
         // Prefix vendor token
         assert!(looks_secret_like(&format!("{}IOSFODNN7EXAMPLE", "AKIA")));
+    }
+
+    #[test]
+    fn looks_secret_like_flags_short_or_letter_only_secrets() {
+        assert!(looks_secret_like("password"));
+        assert!(looks_secret_like("CorrectHorseBatteryStaple"));
+        assert!(looks_secret_like("this string contains SuperSecretPassphrase words"));
+        assert!(looks_secret_like("hunter2"));
+    }
+
+    #[test]
+    fn looks_secret_like_does_not_flag_normal_sentence_prose() {
+        assert!(!looks_secret_like("Native app credential requests require https URLs."));
+        assert!(!looks_secret_like("Run apw doctor --bundle to capture diagnostics."));
     }
 
     #[test]
