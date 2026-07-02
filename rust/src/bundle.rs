@@ -322,6 +322,10 @@ fn looks_secret_like(value: &str) -> bool {
         return true;
     }
 
+    if looks_like_entropy_secret(trimmed) {
+        return true;
+    }
+
     // High-entropy fixed-length tokens that fit common API key shapes.
     // We restrict to runs of pure base64/hex characters so paths and
     // version strings ("aarch64-apple-darwin", "2026-05-21T13:16:39Z")
@@ -414,6 +418,52 @@ fn looks_like_short_or_letter_only_secret(value: &str) -> bool {
     }
 
     false
+}
+
+fn looks_like_entropy_secret(value: &str) -> bool {
+    let compact: String = value
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    if compact.len() < 20 {
+        return false;
+    }
+
+    // Avoid flagging ordinary prose by requiring the string to look token-ish:
+    // either a mostly single-run credential shape or a short passphrase with
+    // only a few words/separators.
+    let word_count = value.split_whitespace().count();
+    let separator_count = value
+        .chars()
+        .filter(|c| c.is_ascii_punctuation() || c.is_ascii_whitespace())
+        .count();
+    let tokenish = separator_count <= 6 || word_count <= 6;
+    if !tokenish {
+        return false;
+    }
+
+    let entropy = shannon_entropy(&compact);
+    entropy >= 3.5
+}
+
+fn shannon_entropy(value: &str) -> f64 {
+    let len = value.chars().count() as f64;
+    if len == 0.0 {
+        return 0.0;
+    }
+
+    let mut counts = std::collections::BTreeMap::new();
+    for ch in value.chars() {
+        *counts.entry(ch).or_insert(0usize) += 1;
+    }
+
+    counts
+        .values()
+        .map(|count| {
+            let p = *count as f64 / len;
+            -p * p.log2()
+        })
+        .sum()
 }
 
 fn matches_secret_keyword(value: &str) -> bool {
@@ -626,6 +676,7 @@ mod tests {
         assert!(looks_secret_like("CorrectHorseBatteryStaple"));
         assert!(looks_secret_like("this string contains SuperSecretPassphrase words"));
         assert!(looks_secret_like("hunter2"));
+        assert!(looks_secret_like("mZ7k!Qp2 xT9v#Rs4 nH6c$Jd8"));
     }
 
     #[test]
