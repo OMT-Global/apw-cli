@@ -663,7 +663,65 @@ fn matches_secret_keyword(value: &str) -> bool {
         "passcode",
         "pin",
     ];
-    KEYWORDS.iter().any(|keyword| lower.contains(keyword))
+    KEYWORDS
+        .iter()
+        .any(|keyword| contains_secret_keyword(&lower, keyword))
+}
+
+fn contains_secret_keyword(value: &str, keyword: &str) -> bool {
+    let mut search_start = 0usize;
+    while let Some(relative_index) = value[search_start..].find(keyword) {
+        let index = search_start + relative_index;
+        let before_ok = value[..index]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_ascii_alphanumeric());
+        let after_index = index + keyword.len();
+        let after_ok = value[after_index..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_ascii_alphanumeric());
+
+        if before_ok && after_ok {
+            let tail = value[after_index..].trim_start_matches(|c: char| {
+                c.is_ascii_whitespace() || matches!(c, ':' | '=' | '-' | '_')
+            });
+            if tail.is_empty() || looks_like_secret_payload(tail) {
+                return true;
+            }
+        }
+
+        search_start = after_index;
+    }
+
+    false
+}
+
+fn looks_like_secret_payload(value: &str) -> bool {
+    let trimmed = value.trim_matches(|c: char| matches!(c, ',' | ';' | '.' | ')' | '('));
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let compact: String = trimmed
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect();
+    if compact.len() < 8 {
+        return false;
+    }
+
+    if !compact
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '_' | '-' | '.'))
+    {
+        return false;
+    }
+
+    let has_digit = compact.chars().any(|c| c.is_ascii_digit());
+    let has_upper = compact.chars().any(|c| c.is_ascii_uppercase());
+    let has_lower = compact.chars().any(|c| c.is_ascii_lowercase());
+    has_digit || (has_upper && has_lower) || compact.len() >= 20
 }
 
 fn summarize_suspicious(value: &str) -> String {
@@ -858,9 +916,8 @@ mod tests {
     fn looks_secret_like_flags_short_or_letter_only_secrets() {
         assert!(looks_secret_like("password"));
         assert!(looks_secret_like("CorrectHorseBatteryStaple"));
-        assert!(looks_secret_like(
-            "this string contains SuperSecretPassphrase words"
-        ));
+        assert!(looks_secret_like("password=CorrectHorseBatteryStaple"));
+        assert!(looks_secret_like("token: abc123DEF456ghi789"));
         assert!(looks_secret_like("hunter2"));
         assert!(looks_secret_like("mZ7k!Qp2 xT9v#Rs4 nH6c$Jd8"));
     }
@@ -895,6 +952,14 @@ mod tests {
     }
 
     #[test]
+    fn looks_secret_like_does_not_flag_keyword_prose() {
+        assert!(!looks_secret_like("OAuth token flow"));
+        assert!(!looks_secret_like("secret sharing"));
+        assert!(!looks_secret_like("pin the version"));
+        assert!(!looks_secret_like("Bearer token flow"));
+    }
+
+    #[test]
     fn audit_redaction_passes_safe_doctor_payload() {
         let payload = json!({
             "ok": true,
@@ -909,6 +974,20 @@ mod tests {
         let mut count = 0;
         audit_redaction(&payload, &mut count).expect("safe payload");
         assert!(count >= 3);
+    }
+
+    #[test]
+    fn audit_redaction_passes_keyword_prose_payload() {
+        let payload = json!({
+            "guidance": [
+                "OAuth token flow",
+                "secret sharing",
+                "pin the version"
+            ]
+        });
+        let mut count = 0;
+        audit_redaction(&payload, &mut count).expect("keyword prose should pass");
+        assert!(count >= 1);
     }
 
     #[test]
