@@ -915,8 +915,9 @@ fn direct_fallback_bounds_oversized_stdout() {
 fn doctor_bundle_fails_closed_when_diagnostic_field_looks_secret_like() {
     // Issue #56: if any diagnostic string looks token-like, the bundle
     // must abort instead of shipping incompletely-redacted material. We
-    // inject the sentinel via APW_RUNNER_LABELS, which flows verbatim
-    // into the CI runner-labels diagnostic.
+    // inject the sentinel via RUNNER_LABELS, which flows verbatim into the
+    // CI runner-labels diagnostic. Use RUNNER_LABELS directly so inherited
+    // self-hosted runner labels cannot hide the sentinel from this test.
     let fixture = NativeAppFixture::new();
     let bundle_dir = TempDir::new().expect("failed to create bundle output dir");
     let bundle_path = bundle_dir.path().join("should-not-exist.tar.gz");
@@ -931,7 +932,7 @@ fn doctor_bundle_fails_closed_when_diagnostic_field_looks_secret_like() {
         ],
         &[
             ("CI", "true"),
-            ("APW_RUNNER_LABELS", "apw-demo-password-leaked-into-labels"),
+            ("RUNNER_LABELS", "apw-demo-password-leaked-into-labels"),
         ],
     );
     assert_ne!(output.status, 0, "expected failure, got {output:#?}");
