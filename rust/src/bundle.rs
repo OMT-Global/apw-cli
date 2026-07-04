@@ -316,7 +316,7 @@ fn looks_secret_like(value: &str) -> bool {
         return false;
     }
 
-    if looks_like_safe_diagnostic_text(trimmed) {
+    if looks_like_safe_diagnostic_text(trimmed) && !contains_embedded_secret_shape(trimmed) {
         return false;
     }
 
@@ -360,27 +360,51 @@ fn looks_secret_like(value: &str) -> bool {
     }
 
     // Vendor-specific obvious prefixes.
-    const TOKEN_PREFIXES: &[&str] = &[
-        "AKIA",
-        "ASIA",
-        concat!("gh", "p_"),
-        "gho_",
-        "ghs_",
-        "ghu_",
-        concat!("github", "_pat_"),
-        "xox",
-        "AIza",
-        "sk-",
-        "sk_live_",
-        "pk_live_",
-    ];
-    for prefix in TOKEN_PREFIXES {
-        if trimmed.contains(prefix) {
-            return true;
-        }
+    if contains_vendor_token_prefix(trimmed) {
+        return true;
     }
 
     false
+}
+
+const TOKEN_PREFIXES: &[&str] = &[
+    "AKIA",
+    "ASIA",
+    concat!("gh", "p_"),
+    "gho_",
+    "ghs_",
+    "ghu_",
+    concat!("github", "_pat_"),
+    "xox",
+    "AIza",
+    "sk-",
+    "sk_live_",
+    "pk_live_",
+];
+
+fn contains_vendor_token_prefix(value: &str) -> bool {
+    TOKEN_PREFIXES.iter().any(|prefix| value.contains(prefix))
+}
+
+fn contains_embedded_secret_shape(value: &str) -> bool {
+    if value.contains("apw-demo-password")
+        || matches_secret_keyword(value)
+        || looks_like_symbol_delimited_secret(value)
+        || contains_vendor_token_prefix(value)
+    {
+        return true;
+    }
+
+    if !value
+        .chars()
+        .any(|c| c.is_ascii_whitespace() || matches!(c, '/' | '\\' | ':' | '='))
+    {
+        return false;
+    }
+
+    value
+        .split(|c: char| c.is_ascii_whitespace() || matches!(c, '/' | '\\' | ':' | '='))
+        .any(|part| looks_like_short_or_letter_only_secret(part) || looks_like_entropy_secret(part))
 }
 
 fn looks_like_short_or_letter_only_secret(value: &str) -> bool {
@@ -917,6 +941,9 @@ mod tests {
         assert!(looks_secret_like("password"));
         assert!(looks_secret_like("CorrectHorseBatteryStaple"));
         assert!(looks_secret_like("password=CorrectHorseBatteryStaple"));
+        assert!(looks_secret_like(
+            "requires password=CorrectHorseBatteryStaple"
+        ));
         assert!(looks_secret_like("token: abc123DEF456ghi789"));
         assert!(looks_secret_like("hunter2"));
         assert!(looks_secret_like("mZ7k!Qp2 xT9v#Rs4 nH6c$Jd8"));
@@ -1009,6 +1036,7 @@ mod tests {
             "token={github_prefix}abc123def456ghi789jkl0"
         )));
         assert!(looks_secret_like("auth failed for sk-abc123"));
+        assert!(looks_secret_like("/tmp/sk-abc123"));
         assert!(looks_secret_like(
             "header: Authorization: Bearer AKIA1234EXAMPLE"
         ));
