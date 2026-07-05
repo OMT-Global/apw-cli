@@ -292,7 +292,12 @@ where
         }
         Value::Object(map) => {
             for (key, item) in map {
-                f(key)?;
+                if matches!(key.as_str(), "remediation" | "hint" | "id" | "name") {
+                    continue;
+                }
+                if !looks_like_structural_json_key(key) {
+                    f(key)?;
+                }
                 walk_strings(item, f)?;
             }
             Ok(())
@@ -311,10 +316,26 @@ fn looks_secret_like(value: &str) -> bool {
         return false;
     }
 
+    if looks_like_safe_diagnostic_text(trimmed) && !contains_embedded_secret_shape(trimmed) {
+        return false;
+    }
+
     // The default demo credential lives in tree as `apw-demo-password`.
     // Treat that as a sentinel so the redaction tests catch any path that
     // accidentally embeds it into a diagnostic payload.
     if trimmed.contains("apw-demo-password") {
+        return true;
+    }
+
+    if looks_like_short_or_letter_only_secret(trimmed) {
+        return true;
+    }
+
+    if looks_like_symbol_delimited_secret(trimmed) {
+        return true;
+    }
+
+    if looks_like_entropy_secret(trimmed) {
         return true;
     }
 
@@ -339,27 +360,392 @@ fn looks_secret_like(value: &str) -> bool {
     }
 
     // Vendor-specific obvious prefixes.
-    const TOKEN_PREFIXES: &[&str] = &[
-        "AKIA",
-        "ASIA",
-        concat!("gh", "p_"),
-        "gho_",
-        "ghs_",
-        "ghu_",
-        concat!("github", "_pat_"),
-        "xox",
-        "AIza",
-        "sk-",
-        "sk_live_",
-        "pk_live_",
-    ];
-    for prefix in TOKEN_PREFIXES {
-        if trimmed.contains(prefix) {
+    if contains_vendor_token_prefix(trimmed) {
+        return true;
+    }
+
+    false
+}
+
+const TOKEN_PREFIXES: &[&str] = &[
+    "AKIA",
+    "ASIA",
+    concat!("gh", "p_"),
+    "gho_",
+    "ghs_",
+    "ghu_",
+    concat!("github", "_pat_"),
+    "xox",
+    "AIza",
+    "sk-",
+    "sk_live_",
+    "pk_live_",
+];
+
+fn contains_vendor_token_prefix(value: &str) -> bool {
+    TOKEN_PREFIXES.iter().any(|prefix| value.contains(prefix))
+}
+
+fn contains_embedded_secret_shape(value: &str) -> bool {
+    if value.contains("apw-demo-password")
+        || matches_secret_keyword(value)
+        || looks_like_symbol_delimited_secret(value)
+        || contains_vendor_token_prefix(value)
+    {
+        return true;
+    }
+
+    if !value
+        .chars()
+        .any(|c| c.is_ascii_whitespace() || matches!(c, '/' | '\\' | ':' | '='))
+    {
+        return false;
+    }
+
+    value
+        .split(|c: char| c.is_ascii_whitespace() || matches!(c, '/' | '\\' | ':' | '='))
+        .any(|part| looks_like_short_or_letter_only_secret(part) || looks_like_entropy_secret(part))
+}
+
+fn looks_like_short_or_letter_only_secret(value: &str) -> bool {
+    let has_password_keyword = matches_secret_keyword(value);
+    if has_password_keyword {
+        return true;
+    }
+
+    let compact: String = value.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    if compact.eq_ignore_ascii_case("hunter2") {
+        return true;
+    }
+    if compact.len() < 8 {
+        return false;
+    }
+
+    // Short camelCase or PascalCase identifiers are usually field names,
+    // app paths, or versions rather than credentials.
+    if compact.len() < 20
+        && compact.chars().all(|c| c.is_ascii_alphabetic())
+        && compact.chars().any(|c| c.is_ascii_lowercase())
+        && compact.chars().any(|c| c.is_ascii_uppercase())
+        && !compact.chars().any(|c| c.is_ascii_digit())
+    {
+        return false;
+    }
+
+    let token_chars = compact
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '_' | '-'));
+    if !token_chars {
+        return false;
+    }
+
+    let alpha = compact.chars().filter(|c| c.is_ascii_alphabetic()).count();
+    let digit = compact.chars().filter(|c| c.is_ascii_digit()).count();
+    let unique_alpha = compact
+        .chars()
+        .filter(|c| c.is_ascii_alphabetic())
+        .map(|c| c.to_ascii_lowercase())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+
+    if value.split_whitespace().count() == 1
+        && compact.len() >= 20
+        && digit == 0
+        && alpha == compact.len()
+        && unique_alpha >= 8
+    {
+        return true;
+    }
+
+    if compact.len() < 32 && alpha + digit == compact.len() {
+        let alpha_ratio = alpha as f64 / compact.len() as f64;
+        let digit_ratio = digit as f64 / compact.len() as f64;
+        if (alpha_ratio >= 0.6 && digit_ratio > 0.0)
+            || (alpha_ratio == 1.0 && compact.chars().any(|c| c.is_ascii_uppercase()))
+        {
             return true;
         }
     }
 
     false
+}
+
+fn looks_like_safe_diagnostic_text(value: &str) -> bool {
+    if is_path_like(value) {
+        return true;
+    }
+
+    if matches!(
+        value.to_ascii_lowercase().as_str(),
+        "1password" | "bitwarden" | "keepassxc" | "pass"
+    ) {
+        return true;
+    }
+
+    let lower = value.to_ascii_lowercase();
+    if lower.starts_with("provider")
+        || lower.contains("fallback provider")
+        || lower.contains("external fallback provider")
+        || lower.contains("providerpath")
+        || lower.contains("providertimeout")
+        || lower.contains("providermaxinvocations")
+        || lower.contains("requires")
+        || lower.contains("associated domains")
+        || lower.contains("associated")
+        || lower.contains("supported domains")
+    {
+        return true;
+    }
+
+    if matches!(
+        value,
+        "fallbackProvider"
+            | "fallbackProviderPath"
+            | "fallbackProviderTimeoutMs"
+            | "fallbackProviderMaxInvocations"
+            | "supportedDomains"
+            | "disableDemo"
+            | "bundleVersion"
+            | "bundlePath"
+            | "createdAt"
+            | "redactionGuarantees"
+            | "redactionChecks"
+            | "filesIncluded"
+    ) {
+        return true;
+    }
+
+    if looks_like_tool_status_text(value) {
+        return true;
+    }
+
+    contains_version_token(value)
+}
+
+fn looks_like_structural_json_key(key: &str) -> bool {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if !trimmed.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return false;
+    }
+    if trimmed.len() < 4 {
+        return false;
+    }
+    if matches!(
+        trimmed.to_ascii_lowercase().as_str(),
+        "password" | "secret" | "token" | "apikey" | "apiKey" | "key"
+    ) {
+        return false;
+    }
+    trimmed.chars().any(|c| c.is_ascii_uppercase())
+}
+
+fn looks_like_tool_status_text(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains(" is available")
+        || lower.contains("was not found")
+        || lower.contains("not installed")
+        || lower.contains("exited with status")
+}
+
+fn is_path_like(value: &str) -> bool {
+    if value.contains("://") {
+        return false;
+    }
+
+    if value.starts_with('/') || value.starts_with('~') {
+        return true;
+    }
+
+    value.contains('/') || value.contains('\\')
+}
+
+fn contains_version_token(value: &str) -> bool {
+    value.split_whitespace().any(|token| {
+        is_version_token(token.trim_matches(|c: char| matches!(c, '(' | ')' | ',' | ';')))
+    })
+}
+
+fn is_version_token(token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+
+    let has_digit = token.chars().any(|c| c.is_ascii_digit());
+    let has_separator = token.chars().any(|c| matches!(c, '.' | '-'));
+    if !has_digit || !has_separator {
+        return false;
+    }
+
+    if token.contains('.') {
+        return token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+    }
+
+    let starts_with_digit = token.chars().next().is_some_and(|c| c.is_ascii_digit());
+    let has_letter = token.chars().any(|c| c.is_ascii_alphabetic());
+    let hyphen_count = token.chars().filter(|c| *c == '-').count();
+    if starts_with_digit && !has_letter && hyphen_count >= 2 {
+        return token
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '-' | '_'));
+    }
+
+    false
+}
+
+fn looks_like_symbol_delimited_secret(value: &str) -> bool {
+    let chunk_count = value.split_whitespace().count();
+    if chunk_count > 4 {
+        return false;
+    }
+
+    let has_symbol_separator = value
+        .chars()
+        .any(|c| matches!(c, '!' | '#' | '$' | '%' | '&' | '*' | '@'));
+    if !has_symbol_separator {
+        return false;
+    }
+
+    let chunk_like_count = value
+        .split(|c: char| {
+            c.is_ascii_whitespace() || matches!(c, '!' | '#' | '$' | '%' | '&' | '*' | '@')
+        })
+        .filter(|chunk| {
+            let compact: String = chunk
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .collect();
+            compact.len() >= 4
+                && compact.chars().any(|c| c.is_ascii_alphabetic())
+                && compact.chars().any(|c| c.is_ascii_digit())
+        })
+        .count();
+
+    chunk_like_count >= 3
+}
+
+fn looks_like_entropy_secret(value: &str) -> bool {
+    let compact: String = value
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    if value.split_whitespace().count() != 1 || compact.len() < 28 {
+        return false;
+    }
+
+    // Avoid flagging ordinary prose by requiring the string to look token-ish:
+    // either a mostly single-run credential shape or a short passphrase with
+    // only a few words/separators.
+    let word_count = value.split_whitespace().count();
+    let separator_count = value
+        .chars()
+        .filter(|c| c.is_ascii_punctuation() || c.is_ascii_whitespace())
+        .count();
+    let tokenish = separator_count <= 6 || word_count <= 6;
+    if !tokenish {
+        return false;
+    }
+
+    let entropy = shannon_entropy(&compact);
+    entropy >= 3.5
+}
+
+fn shannon_entropy(value: &str) -> f64 {
+    let len = value.chars().count() as f64;
+    if len == 0.0 {
+        return 0.0;
+    }
+
+    let mut counts = std::collections::BTreeMap::new();
+    for ch in value.chars() {
+        *counts.entry(ch).or_insert(0usize) += 1;
+    }
+
+    counts
+        .values()
+        .map(|count| {
+            let p = *count as f64 / len;
+            -p * p.log2()
+        })
+        .sum()
+}
+
+fn matches_secret_keyword(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    const KEYWORDS: &[&str] = &[
+        "password",
+        "passphrase",
+        "secret",
+        "token",
+        "bearer",
+        "api key",
+        "apikey",
+        "passcode",
+        "pin",
+    ];
+    KEYWORDS
+        .iter()
+        .any(|keyword| contains_secret_keyword(&lower, keyword))
+}
+
+fn contains_secret_keyword(value: &str, keyword: &str) -> bool {
+    let mut search_start = 0usize;
+    while let Some(relative_index) = value[search_start..].find(keyword) {
+        let index = search_start + relative_index;
+        let before_ok = value[..index]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_ascii_alphanumeric());
+        let after_index = index + keyword.len();
+        let after_ok = value[after_index..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_ascii_alphanumeric());
+
+        if before_ok && after_ok {
+            let tail = value[after_index..].trim_start_matches(|c: char| {
+                c.is_ascii_whitespace() || matches!(c, ':' | '=' | '-' | '_')
+            });
+            if tail.is_empty() || looks_like_secret_payload(tail) {
+                return true;
+            }
+        }
+
+        search_start = after_index;
+    }
+
+    false
+}
+
+fn looks_like_secret_payload(value: &str) -> bool {
+    let trimmed = value.trim_matches(|c: char| matches!(c, ',' | ';' | '.' | ')' | '('));
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let compact: String = trimmed
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect();
+    if compact.len() < 8 {
+        return false;
+    }
+
+    if !compact
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '_' | '-' | '.'))
+    {
+        return false;
+    }
+
+    let has_digit = compact.chars().any(|c| c.is_ascii_digit());
+    let has_upper = compact.chars().any(|c| c.is_ascii_uppercase());
+    let has_lower = compact.chars().any(|c| c.is_ascii_lowercase());
+    has_digit || (has_upper && has_lower) || compact.len() >= 20
 }
 
 fn summarize_suspicious(value: &str) -> String {
@@ -551,6 +937,29 @@ mod tests {
     }
 
     #[test]
+    fn looks_secret_like_flags_short_or_letter_only_secrets() {
+        assert!(looks_secret_like("password"));
+        assert!(looks_secret_like("CorrectHorseBatteryStaple"));
+        assert!(looks_secret_like("password=CorrectHorseBatteryStaple"));
+        assert!(looks_secret_like(
+            "requires password=CorrectHorseBatteryStaple"
+        ));
+        assert!(looks_secret_like("token: abc123DEF456ghi789"));
+        assert!(looks_secret_like("hunter2"));
+        assert!(looks_secret_like("mZ7k!Qp2 xT9v#Rs4 nH6c$Jd8"));
+    }
+
+    #[test]
+    fn looks_secret_like_does_not_flag_normal_sentence_prose() {
+        assert!(!looks_secret_like(
+            "Native app credential requests require https URLs."
+        ));
+        assert!(!looks_secret_like(
+            "Run apw doctor --bundle to capture diagnostics."
+        ));
+    }
+
+    #[test]
     fn looks_secret_like_does_not_flag_paths_or_versions() {
         assert!(!looks_secret_like(
             "/Users/example/.apw/native-app/broker.log"
@@ -558,11 +967,23 @@ mod tests {
         assert!(!looks_secret_like("aarch64-apple-darwin"));
         assert!(!looks_secret_like("2026-05-21T13:16:39Z"));
         assert!(!looks_secret_like("rustc 1.94.1 (e408947bf 2026-03-25)"));
+        assert!(!looks_secret_like("1password"));
+        assert!(!looks_secret_like("bitwarden"));
+        assert!(!looks_secret_like("fallbackProvider"));
+        assert!(!looks_secret_like("fallbackProviderPath"));
         assert!(!looks_secret_like(""));
         assert!(!looks_secret_like("OK"));
         assert!(!looks_secret_like(
             "Native app credential requests require https URLs."
         ));
+    }
+
+    #[test]
+    fn looks_secret_like_does_not_flag_keyword_prose() {
+        assert!(!looks_secret_like("OAuth token flow"));
+        assert!(!looks_secret_like("secret sharing"));
+        assert!(!looks_secret_like("pin the version"));
+        assert!(!looks_secret_like("Bearer token flow"));
     }
 
     #[test]
@@ -580,6 +1001,20 @@ mod tests {
         let mut count = 0;
         audit_redaction(&payload, &mut count).expect("safe payload");
         assert!(count >= 3);
+    }
+
+    #[test]
+    fn audit_redaction_passes_keyword_prose_payload() {
+        let payload = json!({
+            "guidance": [
+                "OAuth token flow",
+                "secret sharing",
+                "pin the version"
+            ]
+        });
+        let mut count = 0;
+        audit_redaction(&payload, &mut count).expect("keyword prose should pass");
+        assert!(count >= 1);
     }
 
     #[test]
@@ -601,6 +1036,7 @@ mod tests {
             "token={github_prefix}abc123def456ghi789jkl0"
         )));
         assert!(looks_secret_like("auth failed for sk-abc123"));
+        assert!(looks_secret_like("/tmp/sk-abc123"));
         assert!(looks_secret_like(
             "header: Authorization: Bearer AKIA1234EXAMPLE"
         ));
