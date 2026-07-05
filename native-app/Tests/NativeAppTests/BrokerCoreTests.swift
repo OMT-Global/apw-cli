@@ -187,6 +187,23 @@ final class BrokerCoreTests: XCTestCase {
     XCTAssertFalse(FileManager.default.fileExists(atPath: makePaths(root).socketPath.path))
   }
 
+  func testPeerCredentialCheckRequiresCurrentEffectiveUser() throws {
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let server = makeServer(root: root)
+    var descriptors = [Int32](repeating: -1, count: 2)
+    XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &descriptors), 0)
+    defer {
+      close(descriptors[0])
+      close(descriptors[1])
+    }
+
+    let currentEuid = geteuid()
+    let mismatchedEuid: uid_t = currentEuid == 0 ? 1 : 0
+    XCTAssertTrue(server.peerIsCurrentUser(descriptors[0], currentEuid: currentEuid))
+    XCTAssertFalse(server.peerIsCurrentUser(descriptors[0], currentEuid: mismatchedEuid))
+  }
+
   func testPromptForApprovalDecisionLogicUsesInjectedPrompter() throws {
     let root = URL(fileURLWithPath: NSTemporaryDirectory())
       .appendingPathComponent(UUID().uuidString, isDirectory: true)

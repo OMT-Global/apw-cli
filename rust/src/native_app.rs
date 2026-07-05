@@ -7,6 +7,7 @@ use std::env;
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
@@ -620,11 +621,15 @@ fn socket_path_safe_to_connect(socket_path: &Path) -> bool {
         Err(_) => return false,
     };
 
-    if !metadata.file_type().is_socket() {
-        return false;
-    }
+    // SAFETY: `geteuid` reads the effective uid for the current process and has
+    // no memory-safety preconditions.
+    socket_metadata_safe_to_connect(&metadata, unsafe { libc::geteuid() })
+}
 
-    metadata.permissions().mode() & 0o777 == NATIVE_APP_FILE_MODE
+fn socket_metadata_safe_to_connect(metadata: &fs::Metadata, current_euid: libc::uid_t) -> bool {
+    metadata.file_type().is_socket()
+        && metadata.uid() == current_euid
+        && (metadata.permissions().mode() & 0o777) == NATIVE_APP_FILE_MODE
 }
 
 fn parse_response(payload: Value) -> Result<Value> {
@@ -2096,6 +2101,29 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .ends_with("broker.log"));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn broker_socket_security_requires_socket_mode_and_current_owner() {
+        with_temp_home(|| {
+            ensure_runtime_dir().unwrap();
+            let socket_path = native_app_socket_path();
+            let listener = bind_restrictive_socket(&socket_path);
+            let metadata = fs::symlink_metadata(&socket_path).unwrap();
+            let current_euid = unsafe { libc::geteuid() };
+            let mismatched_euid = if current_euid == 0 { 1 } else { 0 };
+
+            assert!(socket_path_safe_to_connect(&socket_path));
+            assert!(socket_metadata_safe_to_connect(&metadata, current_euid));
+            assert!(!socket_metadata_safe_to_connect(&metadata, mismatched_euid));
+
+            fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o666)).unwrap();
+            let metadata = fs::symlink_metadata(&socket_path).unwrap();
+            assert!(!socket_metadata_safe_to_connect(&metadata, current_euid));
+
+            drop(listener);
         });
     }
 
