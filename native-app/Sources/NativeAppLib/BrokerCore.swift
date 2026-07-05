@@ -420,6 +420,11 @@ final class BrokerServer {
         continue
       }
 
+      guard peerIsCurrentUser(client) else {
+        close(client)
+        continue
+      }
+
       // Bound the lifetime of any single broker exchange. A peer that stops
       // sending or stops draining must not block the broker forever. See
       // issue #2 / `brokerRequestTimeoutMs`.
@@ -451,6 +456,22 @@ final class BrokerServer {
         try? handle.close()
       }
     }
+  }
+
+  func peerCredentials(for descriptor: Int32) -> (uid: uid_t, gid: gid_t)? {
+    var uid = uid_t()
+    var gid = gid_t()
+    guard getpeereid(descriptor, &uid, &gid) == 0 else {
+      return nil
+    }
+    return (uid, gid)
+  }
+
+  func peerIsCurrentUser(_ descriptor: Int32, currentEuid: uid_t = geteuid()) -> Bool {
+    guard let credentials = peerCredentials(for: descriptor) else {
+      return false
+    }
+    return credentials.uid == currentEuid
   }
 
   private func handleRequest(from handle: FileHandle) throws -> ResponseEnvelope {
