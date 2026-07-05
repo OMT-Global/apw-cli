@@ -30,8 +30,10 @@ Release reference version: `v2.0.0`
   output, process-group timeout)
 - the `keepassxc` provider additionally requires `fallbackProviderDatabase`
   (an absolute `.kdbx` path) and reads the master password from the
-  `APW_KEEPASSXC_PASSWORD` environment variable, feeding it to
-  `keepassxc-cli` over stdin; the password is never written to disk or cached
+  `APW_KEEPASSXC_PASSWORD` environment variable, immediately removes that
+  variable from APW, strips it from spawned provider environments, and feeds
+  the password to `keepassxc-cli` over stdin; the stdin buffer is zeroed after
+  use and the password is never written to disk or cached
 - the `pass` provider relies on `gpg-agent` for the unlock, so APW never
   handles the master key
 
