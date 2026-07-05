@@ -1146,7 +1146,8 @@ fn run_external_provider_command_with_stdin(
         .args(args)
         .stdin(stdin_mode)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .env_remove("APW_KEEPASSXC_PASSWORD");
     // SAFETY: `pre_exec` runs after fork and before exec. The closure only calls
     // `libc::setsid()`, which is async-signal-safe and avoids orphaning provider
     // subprocesses when a timeout kills the process group.
@@ -1562,14 +1563,34 @@ fn load_bitwarden_credential(
     ))
 }
 
+struct SecretStdinPayload(Vec<u8>);
+
+impl SecretStdinPayload {
+    fn new(mut value: String) -> Self {
+        value.push('\n');
+        Self(value.into_bytes())
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl Drop for SecretStdinPayload {
+    fn drop(&mut self) {
+        self.0.fill(0);
+    }
+}
+
 /// Look up a credential via the KeePassXC CLI. Issue #49.
 ///
 /// Requires `fallbackProviderDatabase` to be set to the absolute path of a
 /// `.kdbx` database. The master password is read from the env var
-/// `APW_KEEPASSXC_PASSWORD` and fed to keepassxc-cli over stdin. This is a
-/// reduced-security path (consistent with the rest of `--external-fallback`)
-/// — operators on managed hosts should prefer a key-protected database and
-/// keep the env var out of persistent shell history.
+/// `APW_KEEPASSXC_PASSWORD`, removed from APW, stripped from provider child
+/// environments, and fed to keepassxc-cli over stdin. This is a reduced-security
+/// path (consistent with the rest of `--external-fallback`) — operators on
+/// managed hosts should prefer a key-protected database and keep the env var out
+/// of persistent shell history.
 fn load_keepassxc_credential(
     path: &Path,
     config: &APWConfigV1,
@@ -1599,15 +1620,15 @@ fn load_keepassxc_credential(
             "Fallback provider `keepassxc` requires the master password in APW_KEEPASSXC_PASSWORD for non-interactive use.",
         )
     })?;
-    let mut stdin_payload = master_password.into_bytes();
-    stdin_payload.push(b'\n');
+    env::remove_var("APW_KEEPASSXC_PASSWORD");
+    let stdin_payload = SecretStdinPayload::new(master_password);
 
     let search_output = run_external_provider_command_with_stdin(
         ExternalFallbackProvider::KeePassXC,
         path,
         config,
         &["search", database, host],
-        Some(&stdin_payload),
+        Some(stdin_payload.as_slice()),
     )?;
     if !search_output.success {
         return Err(APWError::new(
@@ -1646,7 +1667,7 @@ fn load_keepassxc_credential(
             database,
             entry,
         ],
-        Some(&stdin_payload),
+        Some(stdin_payload.as_slice()),
     )?;
     if !show_output.success {
         return Err(APWError::new(
@@ -3022,7 +3043,12 @@ else:
             fs::write(
                 &provider_path,
                 r##"#!/usr/bin/env python3
+import os
 import sys
+
+if "APW_KEEPASSXC_PASSWORD" in os.environ:
+    sys.stderr.write("master password leaked into keepassxc-cli environment\n")
+    raise SystemExit(3)
 
 master = sys.stdin.readline().strip()
 if master != "correct-master-password":
@@ -3067,7 +3093,7 @@ else:
 
             env::set_var("APW_KEEPASSXC_PASSWORD", "correct-master-password");
             let payload = native_app_login("https://vault.example.com", true);
-            env::remove_var("APW_KEEPASSXC_PASSWORD");
+            assert!(env::var("APW_KEEPASSXC_PASSWORD").is_err());
             let payload = payload.unwrap();
             assert_eq!(payload["source"], "keepassxc");
             assert_eq!(payload["transport"], "external_cli");

@@ -138,7 +138,8 @@ cache external-provider credentials.
 - **`keepassxc`** — `fallbackProviderPath` points at `keepassxc-cli` and
   `fallbackProviderDatabase` must be set to the absolute path of a `.kdbx`
   database. The master password is read from the `APW_KEEPASSXC_PASSWORD`
-  environment variable and fed to the CLI over stdin; keep it out of
+  environment variable, removed from APW immediately, stripped from spawned
+  provider environments, and fed to the CLI over stdin; keep it out of
   persistent shell history.
 
   ```json
