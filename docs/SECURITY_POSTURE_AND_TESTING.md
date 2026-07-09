@@ -46,6 +46,11 @@ Release reference version: `v2.0.0`
 - Shortcuts and AppleScript automation entrypoints build the same broker
   request envelope as CLI `apw login` / `apw fill`; they do not read credential
   material directly or bypass the broker's user-mediated response path
+- APW.app currently publishes those automation entrypoints without the App
+  Sandbox entitlement; this is a documented same-user local automation surface,
+  not a silent credential-release path. Issue #96 tracks whether to add App
+  Sandbox entitlements and prompt-fatigue rate limiting/coalescing before the
+  automation surface is broadened.
 - bootstrap credentials are read from a local runtime file for the supported
   demo domain only; the app does not create that plaintext file on default
   launch
@@ -145,7 +150,8 @@ The Rust test suite covers:
 - native app socket timeout handling
 - native app diagnostics and `APW_DEMO=1` bootstrap credential file initialization
 - end-to-end v2 app install, launch, status, doctor, and login flows
-- Shortcuts / AppleScript automation envelope parity for `login` and `fill`
+- Shortcuts / AppleScript automation envelope parity for `login` and `fill`,
+  including documentation drift checks for the unsandboxed scriptable surface
 - direct-exec fallback, unsupported-domain handling, denial handling, and malformed broker response mapping
 - signed appcast contract requirements for the future APW.app in-app update channel
 - a manual notarized-hardware validation contract for the Phase 3

@@ -9,6 +9,7 @@ Release reference version: `v2.1.0` planning baseline
 
 - iCloud Keychain password credentials for app-associated domains.
 - Same-user broker requests and responses between the Rust CLI and `APW.app`.
+- AppleScript and Shortcuts/AppIntents automation requests for `APW.app`.
 - APW runtime config under `~/.apw/config.json`.
 - Associated-domain entitlement and AASA state used to decide which domains
   the app may request from Apple Passwords.
@@ -27,6 +28,11 @@ embedded entitlement are out of scope for credential access.
   in the redesign notes, but the current supported transport is the UNIX socket.
 - Native app to Apple Passwords: public AuthenticationServices APIs and
   system-mediated credential UI. Credential release must remain user mediated.
+- Local automation to native app: `APW.app` intentionally publishes an
+  AppleScript dictionary and Shortcuts/AppIntents commands for `request login`
+  and `request fill`. These entrypoints are same-user local automation surfaces
+  and must preserve the same broker envelope, HTTPS validation, and
+  user-mediated credential release semantics as the CLI.
 - Associated-domain trust input: the app's signed entitlement and each
   domain's AASA file determine which hosts can be requested.
 - CLI to external fallback provider: opt-in subprocess execution from an
@@ -51,7 +57,8 @@ broker, not the legacy daemon.
 - Local unprivileged user on the same machine attempting cross-user credential
   access.
 - Same-user malicious process attempting to impersonate the broker socket,
-  replay a credential response, or tamper with runtime files.
+  replay a credential response, tamper with runtime files, or drive the
+  scriptable automation surface repeatedly to induce prompt fatigue.
 - Malicious or corrupted `~/.apw/config.json` attempting to redirect fallback
   provider execution or claim unsupported domains.
 - Compromised external password-manager CLI or shim returning malformed,
@@ -67,6 +74,7 @@ broker, not the legacy daemon.
 | Broker socket spoofing or replay | Same-user runtime directory, socket type and permission checks before connect, bounded request/response sizes, typed request IDs, and timeouts | Same-user malware can still observe user-owned processes; this is out of scope for APW |
 | Malformed or oversized broker response | JSON envelope validation, maximum response size, typed error mapping, and regression coverage | Keep new broker commands on the same envelope |
 | User cancels, denies, or times out in AuthenticationServices | Stable broker error codes and messages, no credential persistence on failure, and `userMediated: true` on success | Real notarized host coverage is tracked by issue #43 |
+| Same-user app drives AppleScript or Shortcuts requests repeatedly | Automation entrypoints route through the same broker request envelope and HTTPS validation as the CLI, the scripting dictionary documents user mediation, and credential release still depends on AuthenticationServices or APW-owned approval UI | `APW.app` is currently not sandboxed and has no automation rate limit/coalescing guard; issue #96 tracks whether to add App Sandbox entitlements and prompt-fatigue controls before broadening automation support |
 | External fallback path hijack | Requires config plus explicit `--external-fallback`, rejects relative and `~` paths, validates executable permissions through symlink targets, uses bounded reads and process-group timeouts, and marks payloads `securityMode: reduced_external_cli` | External providers are an accepted reduced-security mode, not equivalent to Apple Passwords mediation |
 | Runtime config tampering | `~/.apw` and generated files use owner-only permissions, config contains routing metadata rather than plaintext credentials, and managed config is tracked separately | Enterprise override policy is tracked by issue #51 |
 | AASA or entitlement drift | Domain expansion playbook documents entitlement, AASA, signing, notarization, and doctor validation steps | Wildcard/multi-tenant entitlement strategy remains future work under issue #8 |
@@ -85,7 +93,11 @@ broker, not the legacy daemon.
   login, diagnostic-bundle redaction, and fail-closed bundle export behavior.
 - `native-app/Tests/NativeAppTests/BrokerCoreTests.swift` covers the
   AuthenticationServices broker routing contract with injected success and
-  denial outcomes.
+  denial outcomes, plus automation envelope parity for AppleScript/Shortcuts
+  requests.
+- `scripts/test-native-automation-config.sh` checks that the scripting
+  dictionary, AppIntents, Info.plist, Swift bridge, and documented automation
+  risk posture stay aligned.
 - `docs/SECURITY_POSTURE_AND_TESTING.md` lists the release gates that must stay
   aligned with this threat model.
 

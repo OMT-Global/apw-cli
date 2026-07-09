@@ -162,6 +162,10 @@ fn threat_model_documents_current_v2_security_boundary() {
         "Retired surfaces",
         "supported v2 credential-broker boundary",
         "Security regression map",
+        "AppleScript and Shortcuts/AppIntents automation requests",
+        "prompt fatigue",
+        "not sandboxed",
+        "App Sandbox entitlements",
     ] {
         assert!(
             threat_model.contains(required),
@@ -183,6 +187,14 @@ fn threat_model_documents_current_v2_security_boundary() {
     assert!(
         posture.contains("threat-model drift checks"),
         "security posture should list the threat-model drift regression"
+    );
+    assert!(
+        posture.contains("without the App") && posture.contains("Sandbox entitlement"),
+        "security posture should document the current unsandboxed automation surface"
+    );
+    assert!(
+        posture.contains("rate limiting/coalescing"),
+        "security posture should track prompt-fatigue follow-up for automation"
     );
 }
 
