@@ -25,6 +25,24 @@ fn run_command(home: &Path, args: &[&str]) -> (i32, String, String) {
     )
 }
 
+fn run_command_without_home(cwd: &Path, args: &[&str]) -> (i32, String, String) {
+    let path = Path::new(env!("CARGO_BIN_EXE_apw"));
+    let output = Command::new(path)
+        .current_dir(cwd)
+        .env_remove("HOME")
+        .env_remove("USERPROFILE")
+        .env("NO_COLOR", "1")
+        .args(args)
+        .output()
+        .expect("failed to run rust cli without a home directory");
+
+    (
+        output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        String::from_utf8_lossy(&output.stderr).trim().to_string(),
+    )
+}
+
 fn with_temp_home<F, R>(run: F) -> R
 where
     F: FnOnce(&Path) -> R,
@@ -413,6 +431,34 @@ fn status_binary_with_nonexistent_home_directory_isolated() {
     let status = run_command(home, &["status", "--json"]);
     assert_eq!(status.0, 0, "status={}", status.0);
     assert!(status.1.contains("\"ok\":true"));
+}
+
+#[test]
+fn stateful_commands_fail_closed_without_home_and_do_not_write_to_cwd() {
+    let cwd = TempDir::new().expect("failed to create isolated working directory");
+
+    let (status, stdout, stderr) = run_command_without_home(cwd.path(), &["--json", "status"]);
+    assert_eq!(
+        status, 102,
+        "status={status}, stdout={stdout}, stderr={stderr}"
+    );
+    let output = parse_json_output(&stderr);
+    assert_eq!(output["ok"], false);
+    assert_eq!(output["code"], 102);
+    assert!(output["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("HOME and USERPROFILE are not set"));
+    assert!(!cwd.path().join(".apw").exists());
+
+    let (version_status, version_stdout, version_stderr) =
+        run_command_without_home(cwd.path(), &["--json", "version"]);
+    assert_eq!(
+        version_status, 0,
+        "status={version_status}, stdout={version_stdout}, stderr={version_stderr}"
+    );
+    assert!(parse_json_output(&version_stdout)["payload"]["version"].is_string());
+    assert!(!cwd.path().join(".apw").exists());
 }
 
 #[test]

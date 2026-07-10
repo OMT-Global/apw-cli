@@ -2,6 +2,7 @@
 
 use crate::error::{APWError, Result};
 use crate::secrets::{delete_shared_key, read_shared_key, supports_keychain, write_shared_key};
+use crate::state_root;
 use crate::types::{
     normalize_status, APWConfig, APWConfigV1, APWRuntimeConfig, ExternalFallbackProvider,
     RuntimeMode, SecretSource, DEFAULT_HOST, DEFAULT_PORT,
@@ -81,9 +82,8 @@ struct ManagedConfig {
 }
 
 fn config_root() -> PathBuf {
-    let home = env::var("HOME")
-        .unwrap_or_else(|_| env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string()));
-    Path::new(&home).join(".apw")
+    state_root::apw_state_root()
+        .expect("APW state root must be validated before config paths are used")
 }
 
 fn config_path() -> PathBuf {
