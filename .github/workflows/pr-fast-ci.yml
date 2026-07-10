@@ -112,7 +112,10 @@ jobs:
 
   rust-native-e2e:
     name: Rust Native App E2E
-    runs-on: ['self-hosted', 'private', 'macOS', 'ARM64', 'xcode']
+    # Use an isolated hosted runner for PR code. The private macOS pool is
+    # capacity-constrained and must not become a reliability or trust-boundary
+    # dependency for this required gate.
+    runs-on: macos-latest
     timeout-minutes: 30
     needs: changes
     if: >-

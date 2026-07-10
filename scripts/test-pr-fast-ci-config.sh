@@ -58,8 +58,8 @@ done
 require_in_block "$e2e_block" "name: Rust Native App E2E" \
   "The Rust native E2E job name must remain stable."
 require_in_block "$e2e_block" \
-  "runs-on: ['self-hosted', 'private', 'macOS', 'ARM64', 'xcode']" \
-  "Rust native E2E must run on the trusted macOS/Xcode pool."
+  "runs-on: macos-latest" \
+  "Rust native E2E must run on an isolated hosted macOS runner."
 require_in_block "$e2e_block" \
   "needs.changes.outputs.rust_native_e2e == 'true'" \
   "Rust native E2E must stay conditional on its narrow path filter."
