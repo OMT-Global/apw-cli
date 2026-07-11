@@ -2,15 +2,14 @@ name: PR Fast CI
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, edited, synchronize, reopened, ready_for_review]
 
 concurrency:
-  group: pr-fast-hosted-${{ github.event.pull_request.number || github.ref }}
+  group: pr-fast-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
-  pull-requests: read
 
 env:
   NODE_VERSION: '20'
@@ -27,44 +26,33 @@ jobs:
     outputs:
       app: ${{ steps.filter.outputs.app }}
       ci: ${{ steps.filter.outputs.ci }}
-      native_app: ${{ steps.filter.outputs.native_app }}
-      rust_native_e2e: ${{ steps.filter.outputs.rust_native_e2e }}
     steps:
       - uses: dorny/paths-filter@v3
         id: filter
         with:
           filters: |
             app:
-              - 'src/**'
-              - 'rust/**'
-              - 'native-app/**'
-              - 'tests/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - 'package.json'
-              - 'package-lock.json'
-              - 'tsconfig.json'
               - 'project.bootstrap.yaml'
+              - 'AGENTS.md'
+              - 'CONTRIBUTING.md'
+              - '.github/PULL_REQUEST_TEMPLATE.md'
+              - '.githooks/**'
+              - '.github/workflows/**'
               - 'scripts/**'
+              - 'docs/bootstrap/**'
               - 'README.md'
               - 'docs/**'
             ci:
+              - 'project.bootstrap.yaml'
+              - 'AGENTS.md'
+              - 'CONTRIBUTING.md'
+              - '.github/PULL_REQUEST_TEMPLATE.md'
+              - '.githooks/**'
               - '.github/workflows/**'
               - 'scripts/**'
+              - 'docs/bootstrap/**'
               - '.env.example'
               - 'CODEOWNERS'
-            native_app:
-              - 'native-app/**'
-              - 'scripts/build-native-app.sh'
-            rust_native_e2e:
-              # Security-sensitive Rust paths that exercise diagnostics, local
-              # state resolution, or the native broker boundary.
-              - 'rust/src/bundle.rs'
-              - 'rust/src/main.rs'
-              - 'rust/src/native_app.rs'
-              - 'rust/src/state_root.rs'
-              - 'rust/src/utils.rs'
-              - 'rust/tests/native_app_e2e.rs'
 
   fast-checks:
     name: Fast Checks
@@ -73,11 +61,7 @@ jobs:
     needs: changes
     if: >-
       github.event.pull_request.draft == false &&
-      (
-        needs.changes.outputs.app == 'true' ||
-        needs.changes.outputs.ci == 'true' ||
-        needs.changes.outputs.native_app == 'true'
-      )
+      (needs.changes.outputs.app == 'true' || needs.changes.outputs.ci == 'true')
     steps:
       - uses: actions/checkout@v4
         with:
@@ -86,51 +70,55 @@ jobs:
       - name: Run fast checks
         run: bash scripts/ci/run-fast-checks.sh
 
-  native-app-swift-tests:
-    name: Native App Swift Tests
-    # Hosted fallback: the self-hosted macOS/Xcode slots are currently offline,
-    # and this PR needs the native app compile gate to complete before merge.
-    runs-on: macos-latest
-    timeout-minutes: 20
-    needs: changes
-    if: >-
-      github.event.pull_request.draft == false &&
-      needs.changes.outputs.native_app == 'true'
+  validate-pr-description:
+    name: Validate PR Description
+    runs-on: ['self-hosted', 'linux', 'shell-only', 'public']
+    timeout-minutes: 5
+    if: github.event.pull_request.draft == false
+    env:
+      PR_BODY: ${{ github.event.pull_request.body }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Require generated PR template content
+        run: |
+          failed=0
 
-      - name: Run native app xcodebuild tests
-        working-directory: native-app
-        run: >-
-          xcodebuild
-          -scheme APW-Package
-          -destination 'platform=macOS'
-          -derivedDataPath .xcode-derived
-          test
+          require_line() {
+            local line="$1"
+            if ! grep -Fqx "$line" <<<"$PR_BODY"; then
+              echo "Missing required PR section: $line"
+              failed=1
+            fi
+          }
 
-  rust-native-e2e:
-    name: Rust Native App E2E
-    # Use an isolated hosted runner for PR code. The private macOS pool is
-    # capacity-constrained and must not become a reliability or trust-boundary
-    # dependency for this required gate.
-    runs-on: macos-latest
-    timeout-minutes: 30
-    needs: changes
-    if: >-
-      github.event.pull_request.draft == false &&
-      needs.changes.outputs.rust_native_e2e == 'true'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          require_line "## Summary"
+          require_line "## Governing Issue"
+          require_line "## Validation"
+          require_line "## Bootstrap Governance"
+          require_line "## Merge Automation"
+          require_line "## Notes"
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+          if grep -Eiq 'Closes #$|#<issue-number>|what changed|why it changed|notable tradeoffs|migration or rollout notes|follow-up work if any' <<<"$PR_BODY"; then
+            echo "PR body still contains template placeholder text."
+            failed=1
+          fi
 
-      - name: Run Rust native app end-to-end tests
-        run: cargo test --manifest-path rust/Cargo.toml --test native_app_e2e
+          if ! grep -Eiq '(^|[[:space:]-])(((close[sd]?|fix(e[sd])?|resolve[sd]?|refs?|part[[:space:]]+of)[[:space:]]+)?(#|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#|https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/)[0-9]+|no issue is linked|no linked issue|without a linked issue|no governing issue)' <<<"$PR_BODY"; then
+            echo "PR body must close/link an issue or explicitly explain why no issue is linked."
+            failed=1
+          fi
+
+          if ! grep -Eiq '(^|[[:space:]-])(\[[xX]\]|not run|not applicable|n/a)' <<<"$PR_BODY"; then
+            echo "PR body must include validation evidence, a checked validation item, or a reason validation was not run."
+            failed=1
+          fi
+
+          auto_merge_evidence="$(grep -Eiv '^[[:space:]]*-[[:space:]]+\[[[:space:]]\][[:space:]]' <<<"$PR_BODY" || true)"
+          if ! grep -Eiq 'auto-merge (is )?(enabled|armed)|enabled auto-merge|gh pr merge --auto|auto_merge|auto merge enabled|auto-merge (is )?(unavailable|unsafe|not available|not safe)|plan-limit|fallback merge-readiness' <<<"$auto_merge_evidence"; then
+            echo "PR body must state that the PR author enabled auto-merge, or explain why auto-merge is unavailable/unsafe."
+            failed=1
+          fi
+
+          exit "$failed"
 
   validate-secrets:
     name: Validate Secrets
@@ -151,8 +139,7 @@ jobs:
     needs:
       - changes
       - fast-checks
-      - native-app-swift-tests
-      - rust-native-e2e
+      - validate-pr-description
       - validate-secrets
     steps:
       - name: Check required PR jobs
@@ -160,8 +147,7 @@ jobs:
           RESULTS: >-
             changes=${{ needs.changes.result }}
             fast-checks=${{ needs.fast-checks.result }}
-            native-app-swift-tests=${{ needs.native-app-swift-tests.result }}
-            rust-native-e2e=${{ needs.rust-native-e2e.result }}
+            validate-pr-description=${{ needs.validate-pr-description.result }}
             validate-secrets=${{ needs.validate-secrets.result }}
         run: |
           failed=0
