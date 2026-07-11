@@ -1,91 +1,59 @@
-    # Bootstrap Onboarding
+# Bootstrap Onboarding
 
-    ## Local environment check
+Use this checklist after the first bootstrap render or whenever `project.bootstrap.yaml` changes in a way that affects GitHub policy, environments, or home-profile sync.
 
-    - Run `apw doctor` from a fresh checkout — the first-step diagnostic for new
-      contributors. It probes `xcodebuild`, `rustc`, `detect-secrets`, the
-      Apple `Developer ID Application` keychain identity, and the APW.app
-      bundle install state, and prints a `[OK]/[WARN]/[FAIL]` line per check
-      with a remediation hint.
-    - For CI consumers and runner inventory work, `apw doctor --ci` emits the
-      same checks as a structured JSON array (also honors the global `--json`
-      flag). When `CI=true`, set `RUNNER_LABELS` so the doctor can sanity-check
-      the runner pool selection (issue #12).
+## Project
 
-    ## Repo Governance
+- Repository: `OMT-Global/apw-cli`
+- Manifest: `project.bootstrap.yaml`
 
-    This manifest update prepares the desired GitHub governance state, but it does
-    not by itself mutate live repository settings. Treat issue #17 as complete only
-    after a maintainer runs `project-bootstrap apply github --manifest
-    ./project.bootstrap.yaml` or otherwise verifies the equivalent GitHub settings
-    are live.
+## Repo Governance
 
-    - Confirm the repository exists at `OMT-Global/apw-cli`.
-    - Confirm branch protection or rulesets on `main` require one approval and code owner review.
-    - Confirm branch protection points at the `CI Gate` status.
-    - Confirm `delete branch on merge` and `allow auto-merge` are enabled.
-    - Confirm projects and wiki are disabled in live repository settings.
-    - Confirm the GitHub Security Policy surface is enabled from `SECURITY.md`.
-    - Confirm `dev`, `stage`, and `prod` GitHub environments exist with the reviewer gates described below.
+- Confirm branch protection or rulesets on `main` require one approval, code owner review, and approval from someone other than the most recent pusher.
+- Confirm branch protection points at the `CI Gate` status.
+- Confirm `CONTRIBUTING.md` and `.github/PULL_REQUEST_TEMPLATE.md` are present as the required contributor and PR guidance surfaces.
+- Confirm the pull request template is present and PR Fast CI validates the required PR description sections before CI Gate can pass.
+- Confirm `delete branch on merge` and `allow auto-merge` are enabled when the GitHub plan supports them; otherwise record the plan-limit evidence and use the fallback merge-readiness policy.
+- Fallback merge readiness requires passing or intentionally skipped required checks, satisfied approvals, resolved conversations, no blocking review state, and a manual maintainer merge.
 
-    ## Environments
 
-    - `dev`: open by default for rapid iteration.
-    - `stage`: one reviewer required and self-review blocked.
-    - `prod`: one reviewer required, self-review blocked, deployments limited to `main`.
 
-    ## Runner Policy
 
-    - Run `apw --json doctor` first on a new local checkout or self-hosted runner to confirm the Rust, Xcode, secret-scan, signing, and runner-environment diagnostics before extended validation.
-    - Shell-safe jobs must use `[self-hosted, linux, shell-only, public]`.
-    - Docker, service-container, browser, and `container:` workloads require a dedicated self-hosted runner pool with matching capability labels.
-    - Keep PR checks cheap. Add heavy validation to `scripts/ci/run-extended-validation.sh` instead of the PR lane.
-    - APW extended validation requires both Rust (`cargo`) and the macOS Swift toolchain, so the `extended-checks` job must run on the org macOS self-hosted pool (`[self-hosted, private, macOS, ARM64, xcode]`) rather than the Linux shell-only pool.
-    - Rust builds OpenSSL through the `openssl` crate's vendored feature, so the macOS runner needs source-build tools (`cc`, `make`, and `perl`) but does not require Homebrew, pkg-config, or a system OpenSSL prefix.
-    - Extended validation runs `scripts/ci/run-native-app-preflight.sh`, which exercises the Swift package through `xcodebuild`, builds `APW.app`, verifies codesign, and confirms the associated-domain entitlement is embedded.
+## Environments
 
-    ## Release Prep
+- `dev`: open by default for rapid iteration.
+- `stage`: one reviewer required and self-review blocked.
+- `prod`: one reviewer required, self-review blocked, deployments limited to `main`.
 
-    - Run `scripts/bump-version.sh <version>` from the repository root to update all version-bearing release surfaces.
-    - Run `bash scripts/ci/run-fast-checks.sh` after version bumps before opening a release PR.
+## Runner Policy
 
-    ### Release secrets
+- Shell-safe jobs must use `[self-hosted, linux, shell-only, public]`.
+- Native repos must use self-hosted runners for required automation; Docker, service-container, browser, and `container:` workloads require a dedicated self-hosted runner pool with matching capability labels.
+- Keep PR checks cheap. Add heavy validation to `scripts/ci/run-extended-validation.sh` instead of the PR lane.
 
-    The following repository secrets are consumed by `.github/workflows/release.yml`:
+- Consume shared security, release, and AI attestation workflows from the control-plane repo once those contracts are pinned for production use.
 
-    | Secret                       | Purpose                                                       |
-    | ---------------------------- | ------------------------------------------------------------- |
-    | `APPLE_DEVELOPER_CERT_P12`   | base64-encoded Developer ID Application .p12 (issue #7)        |
-    | `APPLE_CERT_PASSWORD`        | passphrase for the .p12 above                                  |
-    | `APPLE_NOTARY_KEY_ID`        | App Store Connect API key id used by `notarytool`              |
-    | `APPLE_NOTARY_KEY_ISSUER`    | App Store Connect issuer UUID                                  |
-    | `APPLE_NOTARY_PRIVATE_KEY`   | base64-encoded `.p8` private key for `notarytool`              |
-    | `HOMEBREW_TAP_TOKEN`         | scoped `contents:write` token on the tap repo (issue #6)       |
+## Contributor And PR Guidance
 
-    | Variable                    | Purpose                                                        |
-    | --------------------------- | -------------------------------------------------------------- |
-    | `APW_SPARKLE_PUBLIC_ED_KEY` | Sparkle EdDSA public key rendered into APW.app                  |
-    | `SPARKLE_GENERATE_APPCAST`  | path to Sparkle's `generate_appcast` executable on the runner   |
+- `CONTRIBUTING.md` defines the contributor workflow, branch expectations, validation expectations, and secret-handling baseline.
+- `.github/PULL_REQUEST_TEMPLATE.md` defines the standard PR shape: summary, governing issue link, validation notes, and bootstrap governance checklist.
+- To retrofit an existing bootstrapped repo, add `CONTRIBUTING.md` and `.github/PULL_REQUEST_TEMPLATE.md` to `repo.managedPaths` when that repo restricts managed paths, then run `bootstrap apply repo --manifest ./project.bootstrap.yaml`.
+- Keep these files repo-generic unless project metadata or the manifest requires a stricter local rule.
 
-    On tagged releases, `scripts/notarize-native-app.sh` imports the Developer
-    ID certificate into a temporary keychain, signs the release CLI and
-    `APW.app`, submits the app bundle to Apple notary service, staples the
-    ticket, and verifies Gatekeeper assessment before the archive is packaged.
-    Tagged releases set `APW_NOTARIZE_REQUIRED=1`, so missing Apple credentials
-    fail the release before artifacts are published. Tagged releases also
-    require the Sparkle variables above so release automation can publish a
-    signed appcast and configure APW.app to trust it. The Homebrew tap job is
-    `continue-on-error` so a missing or rejected token does not block the
-    release.
+## Fleet Reconciliation
 
-    ## Home Profiles
+- Run `bootstrap reconcile --workspace-root ~/src --report bootstrap-reconcile.json` first; this is plan-only and does not write files.
+- Add `--org OMT-Global` when OpenClaw should enumerate GitHub repos first; missing local checkouts or repos without `project.bootstrap.yaml` are skipped and reported.
+- Use `--repo <name...>` as the initial allowlist when onboarding daily OpenClaw reconciliation.
+- Use `--apply-repo --create-pr` for unattended repo drift so generated changes go through draft PRs instead of default-branch pushes.
+- Use `--apply-github` only after the report shape is trusted because it mutates repository settings, environments, branch protection, and labels directly through the GitHub API.
+- Dirty target worktrees are blocked and reported instead of being overwritten.
 
-    - Run `project-bootstrap apply home --manifest ./project.bootstrap.yaml` after reviewing the bundled profile content.
-    - The bootstrap manages portable Codex and Claude assets only. Auth, sessions, caches, and machine-local state stay unmanaged.
 
-    ## Claude Setup
 
-    - First-party Claude web sessions should use `bash scripts/claude-cloud/setup.sh` in `claude.ai/code`.
-- Interactive Claude work is prepared through `.devcontainer/devcontainer.json`.
-- Claude automation lives in `.github/workflows/claude.yml` on the shared self-hosted Linux pool and is intentionally separate from the required PR checks.
-- Finish GitHub-side auth by running `/install-github-app` in Claude Code or adding `ANTHROPIC_API_KEY` as a repo secret.
+
+
+## Home Profiles
+
+- Run `bootstrap apply home --manifest ./project.bootstrap.yaml` after reviewing the bundled profile content.
+- The bootstrap manages portable Codex assets only. Auth, sessions, caches, and machine-local state stay unmanaged.

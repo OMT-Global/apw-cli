@@ -1,5 +1,5 @@
 {
-  "name": "apw Claude Code",
+  "name": "apw-cli Claude Code",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
   "remoteUser": "vscode",
   "updateRemoteUserUID": true,
@@ -16,12 +16,5 @@
   "mounts": [
     "source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind"
   ],
-  "postCreateCommand": "bash scripts/claude/setup-devcontainer.sh",
-  "customizations": {
-    "vscode": {
-      "settings": {
-        "terminal.integrated.defaultProfile.linux": "bash"
-      }
-    }
-  }
+  "postCreateCommand": "bash scripts/claude/setup-devcontainer.sh"
 }
