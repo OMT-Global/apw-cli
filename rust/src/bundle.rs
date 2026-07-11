@@ -259,13 +259,24 @@ fn write_json_file(
     Ok(())
 }
 
+/// How a diagnostic string is expected to be used. Structural paths are
+/// produced by APW itself and may legitimately contain high-entropy path
+/// components (for example macOS' `/var/folders/...` directories). They still
+/// receive the hard credential checks, but do not go through the generic
+/// entropy heuristic used for free text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiagnosticStringKind {
+    FreeText,
+    StructuralPath,
+}
+
 /// Walk every string in the value and fail closed if any matches a
-/// token-like pattern. Counts checked strings so the manifest can record
-/// that redaction actually ran.
+/// credential pattern that is unsafe for its structural context. Counts
+/// checked strings so the manifest can record that redaction actually ran.
 fn audit_redaction(value: &Value, redaction_checks: &mut u32) -> Result<()> {
-    walk_strings(value, &mut |s| {
+    walk_strings(value, DiagnosticStringKind::FreeText, &mut |s, kind| {
         *redaction_checks += 1;
-        if looks_secret_like(s) {
+        if looks_secret_like_for_kind(s, kind) {
             return Err(APWError::new(
                 Status::InvalidConfig,
                 format!(
@@ -278,15 +289,15 @@ fn audit_redaction(value: &Value, redaction_checks: &mut u32) -> Result<()> {
     })
 }
 
-fn walk_strings<F>(value: &Value, f: &mut F) -> Result<()>
+fn walk_strings<F>(value: &Value, kind: DiagnosticStringKind, f: &mut F) -> Result<()>
 where
-    F: FnMut(&str) -> Result<()>,
+    F: FnMut(&str, DiagnosticStringKind) -> Result<()>,
 {
     match value {
-        Value::String(s) => f(s),
+        Value::String(s) => f(s, kind),
         Value::Array(items) => {
             for item in items {
-                walk_strings(item, f)?;
+                walk_strings(item, kind, f)?;
             }
             Ok(())
         }
@@ -296,9 +307,9 @@ where
                     continue;
                 }
                 if !looks_like_structural_json_key(key) {
-                    f(key)?;
+                    f(key, DiagnosticStringKind::FreeText)?;
                 }
-                walk_strings(item, f)?;
+                walk_strings(item, diagnostic_string_kind(key), f)?;
             }
             Ok(())
         }
@@ -306,25 +317,59 @@ where
     }
 }
 
+fn diagnostic_string_kind(field: &str) -> DiagnosticStringKind {
+    if matches!(
+        field,
+        "bundlePath"
+            | "brokerLog"
+            | "brokerLogPath"
+            | "credentialsPath"
+            | "executablePath"
+            | "fallbackProviderPath"
+            | "files"
+            | "filesIncluded"
+            | "path"
+            | "providerPath"
+            | "root"
+            | "socketPath"
+            | "statusFile"
+    ) {
+        DiagnosticStringKind::StructuralPath
+    } else {
+        DiagnosticStringKind::FreeText
+    }
+}
+
 /// Heuristic for "this string looks like a credential and should never
 /// ship in a diagnostic bundle." The check is intentionally aggressive: a
 /// false positive aborts the bundle and tells the operator what to
 /// remove, which is much cheaper than a false negative leaking a token.
+#[cfg(test)]
 fn looks_secret_like(value: &str) -> bool {
+    looks_secret_like_for_kind(value, DiagnosticStringKind::FreeText)
+}
+
+fn looks_secret_like_for_kind(value: &str, kind: DiagnosticStringKind) -> bool {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return false;
     }
 
-    if looks_like_safe_diagnostic_text(trimmed) && !contains_embedded_secret_shape(trimmed) {
+    // These signatures are strong enough to reject in every context,
+    // including a field whose declared shape is a filesystem path.
+    if contains_hard_secret_shape(trimmed) {
+        return true;
+    }
+
+    // Structural path fields come from APW-owned path construction rather
+    // than captured command output. Their random directory names are not
+    // credentials and must not be fed to the generic entropy detector.
+    if kind == DiagnosticStringKind::StructuralPath {
         return false;
     }
 
-    // The default demo credential lives in tree as `apw-demo-password`.
-    // Treat that as a sentinel so the redaction tests catch any path that
-    // accidentally embeds it into a diagnostic payload.
-    if trimmed.contains("apw-demo-password") {
-        return true;
+    if looks_like_safe_diagnostic_text(trimmed) && !contains_embedded_secret_shape(trimmed) {
+        return false;
     }
 
     if looks_like_short_or_letter_only_secret(trimmed) {
@@ -365,6 +410,21 @@ fn looks_secret_like(value: &str) -> bool {
     }
 
     false
+}
+
+fn contains_hard_secret_shape(value: &str) -> bool {
+    // The default demo credential lives in tree as `apw-demo-password`.
+    // Treat that as a sentinel so the redaction tests catch any path that
+    // accidentally embeds it into a diagnostic payload.
+    value.contains("apw-demo-password")
+        || contains_vendor_token_prefix(value)
+        || matches_secret_keyword(value)
+        || value
+            .chars()
+            .filter(|c| !c.is_ascii_whitespace())
+            .collect::<String>()
+            .eq_ignore_ascii_case("hunter2")
+        || looks_like_symbol_delimited_secret(value)
 }
 
 const TOKEN_PREFIXES: &[&str] = &[
@@ -471,10 +531,6 @@ fn looks_like_short_or_letter_only_secret(value: &str) -> bool {
 }
 
 fn looks_like_safe_diagnostic_text(value: &str) -> bool {
-    if is_path_like(value) {
-        return true;
-    }
-
     if matches!(
         value.to_ascii_lowercase().as_str(),
         "1password" | "bitwarden" | "keepassxc" | "pass"
@@ -548,18 +604,6 @@ fn looks_like_tool_status_text(value: &str) -> bool {
         || lower.contains("was not found")
         || lower.contains("not installed")
         || lower.contains("exited with status")
-}
-
-fn is_path_like(value: &str) -> bool {
-    if value.contains("://") {
-        return false;
-    }
-
-    if value.starts_with('/') || value.starts_with('~') {
-        return true;
-    }
-
-    value.contains('/') || value.contains('\\')
 }
 
 fn contains_version_token(value: &str) -> bool {
@@ -961,8 +1005,9 @@ mod tests {
 
     #[test]
     fn looks_secret_like_does_not_flag_paths_or_versions() {
-        assert!(!looks_secret_like(
-            "/Users/example/.apw/native-app/broker.log"
+        assert!(!looks_secret_like_for_kind(
+            "/Users/example/.apw/native-app/broker.log",
+            DiagnosticStringKind::StructuralPath,
         ));
         assert!(!looks_secret_like("aarch64-apple-darwin"));
         assert!(!looks_secret_like("2026-05-21T13:16:39Z"));
@@ -1001,6 +1046,48 @@ mod tests {
         let mut count = 0;
         audit_redaction(&payload, &mut count).expect("safe payload");
         assert!(count >= 3);
+    }
+
+    #[test]
+    fn audit_redaction_passes_high_entropy_structural_paths() {
+        let macos_temp = "/var/folders/y6/tztzb3x94_jgw8fjvdp7lh7w0000gn/T/apw-doctor-staging";
+        let payload = json!({
+            "bundlePath": format!("{macos_temp}/apw-doctor-bundle.tar.gz"),
+            "root": format!("{macos_temp}/native-app"),
+            "entries": [
+                {"path": "credentials.json", "type": "file"}
+            ],
+            "guidance": [
+                format!("Inspect broker logs at {macos_temp}/broker.log.")
+            ]
+        });
+        let mut count = 0;
+        audit_redaction(&payload, &mut count).expect("structural paths should pass");
+        assert!(count >= 6);
+    }
+
+    #[test]
+    fn audit_redaction_rejects_high_entropy_free_text() {
+        let payload = json!({
+            "message": "tztzb3x94_jgw8fjvdp7lh7w0000gn",
+        });
+        let mut count = 0;
+        let err = audit_redaction(&payload, &mut count).expect_err("free text must abort");
+        assert_eq!(err.code, Status::InvalidConfig);
+        assert!(err.message.contains("Aborting bundle"));
+    }
+
+    #[test]
+    fn audit_redaction_rejects_vendor_token_in_structural_path() {
+        let github_prefix = ["gh", "p_"].concat();
+        let payload = json!({
+            "root": format!("/tmp/{github_prefix}abc123def456ghi789jkl0"),
+        });
+        let mut count = 0;
+        let err = audit_redaction(&payload, &mut count)
+            .expect_err("hard signatures must abort in structural paths");
+        assert_eq!(err.code, Status::InvalidConfig);
+        assert!(err.message.contains("Aborting bundle"));
     }
 
     #[test]

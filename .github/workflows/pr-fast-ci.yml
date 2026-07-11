@@ -28,6 +28,7 @@ jobs:
       app: ${{ steps.filter.outputs.app }}
       ci: ${{ steps.filter.outputs.ci }}
       native_app: ${{ steps.filter.outputs.native_app }}
+      rust_native_e2e: ${{ steps.filter.outputs.rust_native_e2e }}
     steps:
       - uses: dorny/paths-filter@v3
         id: filter
@@ -55,6 +56,15 @@ jobs:
             native_app:
               - 'native-app/**'
               - 'scripts/build-native-app.sh'
+            rust_native_e2e:
+              # Security-sensitive Rust paths that exercise diagnostics, local
+              # state resolution, or the native broker boundary.
+              - 'rust/src/bundle.rs'
+              - 'rust/src/main.rs'
+              - 'rust/src/native_app.rs'
+              - 'rust/src/state_root.rs'
+              - 'rust/src/utils.rs'
+              - 'rust/tests/native_app_e2e.rs'
 
   fast-checks:
     name: Fast Checks
@@ -100,6 +110,28 @@ jobs:
           -derivedDataPath .xcode-derived
           test
 
+  rust-native-e2e:
+    name: Rust Native App E2E
+    # Use an isolated hosted runner for PR code. The private macOS pool is
+    # capacity-constrained and must not become a reliability or trust-boundary
+    # dependency for this required gate.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    needs: changes
+    if: >-
+      github.event.pull_request.draft == false &&
+      needs.changes.outputs.rust_native_e2e == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Rust native app end-to-end tests
+        run: cargo test --manifest-path rust/Cargo.toml --test native_app_e2e
+
   validate-secrets:
     name: Validate Secrets
     runs-on: ['self-hosted', 'linux', 'shell-only', 'public']
@@ -120,6 +152,7 @@ jobs:
       - changes
       - fast-checks
       - native-app-swift-tests
+      - rust-native-e2e
       - validate-secrets
     steps:
       - name: Check required PR jobs
@@ -128,6 +161,7 @@ jobs:
             changes=${{ needs.changes.result }}
             fast-checks=${{ needs.fast-checks.result }}
             native-app-swift-tests=${{ needs.native-app-swift-tests.result }}
+            rust-native-e2e=${{ needs.rust-native-e2e.result }}
             validate-secrets=${{ needs.validate-secrets.result }}
         run: |
           failed=0

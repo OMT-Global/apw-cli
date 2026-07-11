@@ -1,5 +1,6 @@
 use crate::error::{APWError, Result};
 use crate::logging;
+use crate::state_root;
 use crate::types::{APWConfigV1, ExternalFallbackProvider, Status, MAX_MESSAGE_BYTES, VERSION};
 use crate::utils::{read_config_file, read_config_file_or_empty, validate_external_provider_path};
 use serde_json::{json, Value};
@@ -47,19 +48,6 @@ fn diagnostic(
         "message": message.into(),
         "hint": hint.into(),
     })
-}
-
-fn home_dir() -> PathBuf {
-    match env::var("HOME").or_else(|_| env::var("USERPROFILE")) {
-        Ok(dir) => PathBuf::from(dir),
-        Err(_) => {
-            logging::warn(
-                "native-app",
-                "HOME is not set; runtime files will be written to the current directory",
-            );
-            PathBuf::from(".")
-        }
-    }
 }
 
 fn set_permissions(path: &Path, mode: u32) -> Result<()> {
@@ -126,7 +114,9 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
 }
 
 pub fn native_app_runtime_dir() -> PathBuf {
-    home_dir().join(".apw").join("native-app")
+    state_root::apw_state_root()
+        .expect("APW state root must be validated before native app paths are used")
+        .join("native-app")
 }
 
 pub fn native_app_socket_path() -> PathBuf {
@@ -2234,7 +2224,7 @@ else:
             permissions.set_mode(0o755);
             fs::set_permissions(&provider_path, permissions).unwrap();
 
-            let config_root = home_dir().join(".apw");
+            let config_root = state_root::apw_state_root().unwrap();
             fs::create_dir_all(&config_root).unwrap();
             let config = APWConfigV1 {
                 username: "demo".to_string(),
@@ -2296,7 +2286,7 @@ else:
             permissions.set_mode(0o755);
             fs::set_permissions(&provider_path, permissions).unwrap();
 
-            let config_root = home_dir().join(".apw");
+            let config_root = state_root::apw_state_root().unwrap();
             fs::create_dir_all(&config_root).unwrap();
             let config = APWConfigV1 {
                 username: "demo".to_string(),
@@ -2485,7 +2475,7 @@ print(json.dumps([{"login":{"username":"alice@example.com","password":"secret","
             permissions.set_mode(0o755);
             fs::set_permissions(&provider_path, permissions).unwrap();
 
-            let config_root = home_dir().join(".apw");
+            let config_root = state_root::apw_state_root().unwrap();
             fs::create_dir_all(&config_root).unwrap();
             let config = APWConfigV1 {
                 username: "demo".to_string(),
@@ -2509,7 +2499,7 @@ print(json.dumps([{"login":{"username":"alice@example.com","password":"secret","
     #[serial]
     fn login_rejects_relative_external_provider_paths() {
         with_temp_home(|| {
-            let config_root = home_dir().join(".apw");
+            let config_root = state_root::apw_state_root().unwrap();
             fs::create_dir_all(&config_root).unwrap();
             let config = APWConfigV1 {
                 username: "demo".to_string(),
@@ -2552,7 +2542,7 @@ sleep 10
             permissions.set_mode(0o755);
             fs::set_permissions(&provider_path, permissions).unwrap();
 
-            let config_root = home_dir().join(".apw");
+            let config_root = state_root::apw_state_root().unwrap();
             fs::create_dir_all(&config_root).unwrap();
             let config = APWConfigV1 {
                 username: "demo".to_string(),
@@ -2613,7 +2603,7 @@ else:
             permissions.set_mode(0o755);
             fs::set_permissions(&provider_path, permissions).unwrap();
 
-            let config_root = home_dir().join(".apw");
+            let config_root = state_root::apw_state_root().unwrap();
             fs::create_dir_all(&config_root).unwrap();
             let config = APWConfigV1 {
                 username: "demo".to_string(),
@@ -2909,7 +2899,7 @@ else:
             permissions.set_mode(0o755);
             fs::set_permissions(&provider_path, permissions).unwrap();
 
-            let config_root = home_dir().join(".apw");
+            let config_root = state_root::apw_state_root().unwrap();
             fs::create_dir_all(&config_root).unwrap();
             let config = APWConfigV1 {
                 username: "demo".to_string(),
@@ -2965,7 +2955,7 @@ else:
             permissions.set_mode(0o755);
             fs::set_permissions(&provider_path, permissions).unwrap();
 
-            let config_root = home_dir().join(".apw");
+            let config_root = state_root::apw_state_root().unwrap();
             fs::create_dir_all(&config_root).unwrap();
             let config = APWConfigV1 {
                 username: "demo".to_string(),
@@ -3011,7 +3001,7 @@ else:
             permissions.set_mode(0o755);
             fs::set_permissions(&provider_path, permissions).unwrap();
 
-            let config_root = home_dir().join(".apw");
+            let config_root = state_root::apw_state_root().unwrap();
             fs::create_dir_all(&config_root).unwrap();
             let config = APWConfigV1 {
                 username: "demo".to_string(),
@@ -3075,7 +3065,7 @@ else:
             let database_path = provider_dir.path().join("Passwords.kdbx");
             fs::write(&database_path, b"placeholder-kdbx").unwrap();
 
-            let config_root = home_dir().join(".apw");
+            let config_root = state_root::apw_state_root().unwrap();
             fs::create_dir_all(&config_root).unwrap();
             let config = APWConfigV1 {
                 username: "demo".to_string(),
@@ -3117,7 +3107,7 @@ else:
             let database_path = provider_dir.path().join("Passwords.kdbx");
             fs::write(&database_path, b"placeholder-kdbx").unwrap();
 
-            let config_root = home_dir().join(".apw");
+            let config_root = state_root::apw_state_root().unwrap();
             fs::create_dir_all(&config_root).unwrap();
             let config = APWConfigV1 {
                 username: "demo".to_string(),
@@ -3155,7 +3145,7 @@ else:
             permissions.set_mode(0o755);
             fs::set_permissions(&provider_path, permissions).unwrap();
 
-            let config_root = home_dir().join(".apw");
+            let config_root = state_root::apw_state_root().unwrap();
             fs::create_dir_all(&config_root).unwrap();
             let config = APWConfigV1 {
                 username: "demo".to_string(),

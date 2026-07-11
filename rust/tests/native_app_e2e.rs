@@ -730,8 +730,15 @@ fn doctor_bundle_writes_deterministic_redacted_archive() {
     // includes credentials.json contents. We populate
     // ~/.apw/native-app/credentials.json with plausible secret material
     // and assert that the secret never appears anywhere in the archive.
+    // The HOME path deliberately includes a macOS /var/folders-style random
+    // component so issue #95 cannot regress only on macOS runners.
     let fixture = NativeAppFixture::new();
-    let runtime = fixture.home().join(".apw/native-app");
+    let structural_home = fixture
+        .home()
+        .join("y6")
+        .join("tztzb3x94_jgw8fjvdp7lh7w0000gn")
+        .join("T");
+    let runtime = structural_home.join(".apw/native-app");
     fs::create_dir_all(&runtime).expect("failed to create runtime");
     fs::write(
         runtime.join("credentials.json"),
@@ -755,7 +762,7 @@ fn doctor_bundle_writes_deterministic_redacted_archive() {
             "--bundle",
             bundle_path.to_str().unwrap(),
         ],
-        &[],
+        &[("HOME", structural_home.to_str().expect("UTF-8 temp path"))],
     );
     assert_eq!(output.status, 0, "{output:#?}");
 
