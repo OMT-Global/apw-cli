@@ -40,11 +40,9 @@ jobs:
         id: preset
         if: github.event_name != 'push'
         run: |
-          cat >>"$GITHUB_OUTPUT" <<'EOF'
-          app=true
-          ci=true
-          extended=true
-          EOF
+          echo "app=true" >> "$GITHUB_OUTPUT"
+          echo "ci=true" >> "$GITHUB_OUTPUT"
+          echo "extended=true" >> "$GITHUB_OUTPUT"
 
       - uses: dorny/paths-filter@v3
         id: filter
@@ -54,8 +52,8 @@ jobs:
             app:
               - 'project.bootstrap.yaml'
               - 'AGENTS.md'
-              - 'CONTRIBUTING.md'
-              - '.github/PULL_REQUEST_TEMPLATE.md'
+              - 'CLAUDE.md'
+              - '.devcontainer/**'
               - '.githooks/**'
               - '.github/workflows/**'
               - 'scripts/**'
@@ -65,8 +63,8 @@ jobs:
             ci:
               - 'project.bootstrap.yaml'
               - 'AGENTS.md'
-              - 'CONTRIBUTING.md'
-              - '.github/PULL_REQUEST_TEMPLATE.md'
+              - 'CLAUDE.md'
+              - '.devcontainer/**'
               - '.githooks/**'
               - '.github/workflows/**'
               - 'scripts/**'
@@ -91,12 +89,22 @@ jobs:
 
   extended-checks:
     name: Extended Checks
-    runs-on: ['self-hosted', 'linux', 'shell-only', 'public']
-    timeout-minutes: 20
+    runs-on: ['self-hosted', 'private', 'macOS', 'ARM64', 'xcode']
+    timeout-minutes: 40
     needs: changes
     if: needs.changes.outputs.extended == 'true' || needs.changes.outputs.app == 'true'
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify vendored OpenSSL build inputs
+        # Issue #40: Rust now builds OpenSSL through the openssl crate's
+        # vendored feature, so the macOS runner no longer needs Homebrew,
+        # pkg-config, or a system OpenSSL prefix. This step keeps clean
+        # runner failures explicit before the longer Rust build starts.
+        run: bash scripts/ci/run-extended-validation.sh --check-build-inputs
 
       - name: Run extended validation
         run: bash scripts/ci/run-extended-validation.sh
