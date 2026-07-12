@@ -28,7 +28,7 @@ require_pattern() {
   file="$1"
   pattern="$2"
   description="$3"
-  if ! grep -Eq "$pattern" "$file"; then
+  if ! grep -Eq -- "$pattern" "$file"; then
     echo "Missing appcast contract requirement in $file: $description" >&2
     exit 1
   fi
@@ -64,6 +64,7 @@ require_pattern "$DOC_PATH" "SPARKLE_GENERATE_APPCAST" "release runner generate_
 require_pattern "$DOC_PATH" "APW_SPARKLE_PUBLIC_ED_KEY" "release runner Sparkle public key configuration"
 require_pattern "$DOC_PATH" "fails before publishing" "tagged release fails without Sparkle config"
 require_pattern "$DOC_PATH" "SPUStandardUpdaterController" "runtime Sparkle updater controller"
+require_pattern "$DOC_PATH" "APW-Sparkle-Critical-Update-Version" "annotated-tag security update metadata"
 
 require_pattern "$TEMPLATE_PATH" "xmlns:sparkle=\"http://www\\.andymatuschak\\.org/xml-namespaces/sparkle\"" "Sparkle namespace"
 require_pattern "$TEMPLATE_PATH" "<title>APW [0-9]+\\.[0-9]+\\.[0-9]+ Security Update</title>" "security update title"
@@ -99,6 +100,9 @@ PY
 
 require_pattern "$PREPARE_SCRIPT" "generate_appcast" "Sparkle appcast generation invocation"
 require_pattern "$PREPARE_SCRIPT" "sparkle:edSignature=" "signed appcast output enforcement"
+require_pattern "$PREPARE_SCRIPT" "critical-update-version" "critical update generator metadata"
+require_pattern "$PREPARE_SCRIPT" "download-url-prefix" "published archive URL generator metadata"
+require_pattern "$PREPARE_SCRIPT" "release-url" "release link generator metadata"
 require_pattern "$PREPARE_SCRIPT" "Do not pass private keys" "private key handling guardrail"
 require_pattern "$PREPARE_TEST" "Sparkle appcast preparation test passed" "helper regression test"
 require_pattern "$PLIST_RENDERER" "SUFeedURL" "native app Sparkle feed plist key"
@@ -121,6 +125,12 @@ require_pattern "$BUILD_NATIVE_APP" "@loader_path/\\.\\./Frameworks" "native app
 require_pattern "$RELEASE_WORKFLOW" "prepare-sparkle-appcast\\.sh" "release appcast preparation step"
 require_pattern "$RELEASE_WORKFLOW" "SPARKLE_GENERATE_APPCAST" "release appcast generator variable"
 require_pattern "$RELEASE_WORKFLOW" "APW_SPARKLE_PUBLIC_ED_KEY" "release Sparkle public key variable"
+require_pattern "$RELEASE_WORKFLOW" "APW-Sparkle-Critical-Update-Version" "annotated-tag security update metadata"
+require_pattern "$RELEASE_WORKFLOW" "objecttype" "annotated critical-update tag validation"
+require_pattern "$RELEASE_WORKFLOW" "Critical Sparkle updates require annotated release tags" "annotated critical-update tag failure"
+require_pattern "$RELEASE_WORKFLOW" "--critical-update-version" "Sparkle critical update generator invocation"
+require_pattern "$RELEASE_WORKFLOW" "--download-url-prefix" "Sparkle archive download URL generator invocation"
+require_pattern "$RELEASE_WORKFLOW" "--release-url" "Sparkle release link generator invocation"
 require_pattern "$RELEASE_WORKFLOW" "Sparkle release configuration is incomplete" "tagged release Sparkle config fail-closed gate"
 require_pattern "$RELEASE_WORKFLOW" "dist/appcast\\.xml" "release appcast asset upload"
 require_pattern "$RELEASE_WORKFLOW" "APW\\.app-\\$\\{\\{ github\\.ref_name \\}\\}\\.zip" "release Sparkle app archive upload"
