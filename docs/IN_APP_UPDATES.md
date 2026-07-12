@@ -136,6 +136,23 @@ Critical update status is reserved for credential-broker security fixes,
 signing/notarization failures, or vulnerabilities that can affect credential
 confidentiality, integrity, or update trust.
 
+### Release classification
+
+Normal tags create ordinary updates. To mark a tagged release as a critical
+security update, create an annotated tag with exactly one metadata line:
+
+```text
+APW-Sparkle-Critical-Update-Version: all
+```
+
+Use a specific Sparkle build version instead of `all` when only installations
+at or below that version should see the update as critical. The release workflow
+passes this metadata to Sparkle's `generate_appcast` tool, adds the required
+`Security` release-notes section, and links the generated item to the exact
+GitHub release tag. Because the metadata lives in the immutable annotated tag,
+a critical classification cannot leak into a later ordinary release through a
+stale repository variable.
+
 ## Validation
 
 Run the contract check with:

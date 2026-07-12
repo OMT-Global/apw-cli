@@ -16,6 +16,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          # Security-update metadata is stored in the annotated release tag.
+          fetch-depth: 0
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -178,19 +181,57 @@ jobs:
 
           app_zip="dist/APW.app-${GITHUB_REF_NAME}.zip"
           release_notes="dist/APW.app-${GITHUB_REF_NAME}.md"
+          release_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME}"
+          download_url_prefix="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/"
+          tag_ref="refs/tags/${GITHUB_REF_NAME}"
+          tag_object_type="$(git for-each-ref "$tag_ref" --format='%(objecttype)')"
+          critical_update_metadata="$(git for-each-ref "$tag_ref" --format='%(contents)' | sed -n 's/^APW-Sparkle-Critical-Update-Version:[[:space:]]*//p')"
+          critical_update_metadata_count="$(printf '%s\n' "$critical_update_metadata" | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [ "$critical_update_metadata_count" -gt 1 ]; then
+            echo "Release tag contains more than one APW-Sparkle-Critical-Update-Version line." >&2
+            exit 1
+          fi
+          critical_update_version="$critical_update_metadata"
+          critical_update_args=()
+
+          if [ -n "$critical_update_version" ]; then
+            if [ "$tag_object_type" != "tag" ]; then
+              echo "Critical Sparkle updates require annotated release tags." >&2
+              exit 1
+            fi
+            if [ "$critical_update_version" = "all" ]; then
+              critical_update_args=(--critical-update-version "")
+            else
+              critical_update_args=(--critical-update-version "$critical_update_version")
+            fi
+            update_title="APW ${GITHUB_REF_NAME} Security Update"
+          else
+            update_title="APW ${GITHUB_REF_NAME} Update"
+          fi
 
           ditto -c -k --keepParent native-app/dist/APW.app "$app_zip"
           {
-            echo "# APW ${GITHUB_REF_NAME}"
+            echo "# $update_title"
             echo
-            echo "See the GitHub release notes for this tag."
+            if [ -n "$critical_update_version" ]; then
+              echo "## Security"
+              echo
+              echo "See the GitHub release notes for this security update."
+            else
+              echo "## Changes"
+              echo
+              echo "See the GitHub release notes for this update."
+            fi
           } > "$release_notes"
 
           ./scripts/prepare-sparkle-appcast.sh \
             --archive "$app_zip" \
             --release-notes "$release_notes" \
             --updates-dir dist/sparkle-updates \
-            --generate-appcast "$SPARKLE_GENERATE_APPCAST"
+            --generate-appcast "$SPARKLE_GENERATE_APPCAST" \
+            --download-url-prefix "$download_url_prefix" \
+            --release-url "$release_url" \
+            "${critical_update_args[@]}"
 
           cp dist/sparkle-updates/appcast.xml dist/appcast.xml
           echo "available=true" >> "$GITHUB_OUTPUT"

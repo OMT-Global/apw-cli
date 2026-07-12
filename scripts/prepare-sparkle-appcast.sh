@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: ./scripts/prepare-sparkle-appcast.sh --archive PATH --release-notes PATH --updates-dir DIR --generate-appcast PATH [--feed-url URL]
+Usage: ./scripts/prepare-sparkle-appcast.sh --archive PATH --release-notes PATH --updates-dir DIR --generate-appcast PATH [options]
 
 Prepare a Sparkle updates directory and run Sparkle's generate_appcast tool.
 The tool is expected to sign archives, release notes, and the appcast using
@@ -16,6 +16,11 @@ Options:
   --updates-dir DIR         Directory holding Sparkle update archives.
   --generate-appcast PATH   Path to Sparkle's generate_appcast executable.
   --feed-url URL            Feed URL; default is APW's production appcast URL.
+  --download-url-prefix URL HTTPS prefix for published update archives.
+  --release-url URL         HTTPS GitHub release URL linked by the appcast item.
+  --critical-update-version VERSION
+                           Mark the item as critical for versions through VERSION.
+                           Pass an empty value to mark it critical for all versions.
   -h, --help                Show this help.
 USAGE
 }
@@ -25,6 +30,10 @@ ARCHIVE_PATH=""
 RELEASE_NOTES_PATH=""
 UPDATES_DIR=""
 GENERATE_APPCAST=""
+DOWNLOAD_URL_PREFIX=""
+RELEASE_URL=""
+CRITICAL_UPDATE_VERSION=""
+CRITICAL_UPDATE_VERSION_SET=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -46,6 +55,19 @@ while [ "$#" -gt 0 ]; do
       ;;
     --feed-url)
       FEED_URL="${2:-}"
+      shift 2
+      ;;
+    --download-url-prefix)
+      DOWNLOAD_URL_PREFIX="${2:-}"
+      shift 2
+      ;;
+    --release-url)
+      RELEASE_URL="${2:-}"
+      shift 2
+      ;;
+    --critical-update-version)
+      CRITICAL_UPDATE_VERSION="${2:-}"
+      CRITICAL_UPDATE_VERSION_SET=1
       shift 2
       ;;
     -h|--help)
@@ -75,6 +97,20 @@ case "$FEED_URL" in
   *) fail "--feed-url must be an https URL" ;;
 esac
 
+if [ -n "$DOWNLOAD_URL_PREFIX" ]; then
+  case "$DOWNLOAD_URL_PREFIX" in
+    https://*/) ;;
+    *) fail "--download-url-prefix must be an https URL ending in /" ;;
+  esac
+fi
+
+if [ -n "$RELEASE_URL" ]; then
+  case "$RELEASE_URL" in
+    https://*) ;;
+    *) fail "--release-url must be an https URL" ;;
+  esac
+fi
+
 [ -f "$ARCHIVE_PATH" ] || fail "archive not found: $ARCHIVE_PATH"
 [ -f "$RELEASE_NOTES_PATH" ] || fail "release notes not found: $RELEASE_NOTES_PATH"
 [ -x "$GENERATE_APPCAST" ] || fail "generate_appcast is not executable: $GENERATE_APPCAST"
@@ -92,7 +128,22 @@ mkdir -p "$UPDATES_DIR"
 cp "$ARCHIVE_PATH" "$UPDATES_DIR/$archive_name"
 cp "$RELEASE_NOTES_PATH" "$UPDATES_DIR/$archive_name.md"
 
-"$GENERATE_APPCAST" "$UPDATES_DIR"
+generate_args=()
+if [ -n "$DOWNLOAD_URL_PREFIX" ]; then
+  generate_args+=(--download-url-prefix "$DOWNLOAD_URL_PREFIX")
+fi
+if [ -n "$RELEASE_URL" ]; then
+  generate_args+=(--link "$RELEASE_URL")
+fi
+if [ "$CRITICAL_UPDATE_VERSION_SET" -eq 1 ]; then
+  generate_args+=(--critical-update-version "$CRITICAL_UPDATE_VERSION")
+fi
+
+if [ "${#generate_args[@]}" -gt 0 ]; then
+  "$GENERATE_APPCAST" "${generate_args[@]}" "$UPDATES_DIR"
+else
+  "$GENERATE_APPCAST" "$UPDATES_DIR"
+fi
 
 appcast_path="$UPDATES_DIR/$feed_file"
 [ -f "$appcast_path" ] || fail "generate_appcast did not create $appcast_path"
@@ -113,6 +164,14 @@ fi
 
 if ! grep -q "$archive_name" "$appcast_path"; then
   fail "$appcast_path does not reference $archive_name"
+fi
+
+if [ -n "$DOWNLOAD_URL_PREFIX" ] && ! grep -Fq "$DOWNLOAD_URL_PREFIX$archive_name" "$appcast_path"; then
+  fail "$appcast_path does not reference the configured download URL prefix"
+fi
+
+if [ -n "$RELEASE_URL" ] && ! grep -Fq "$RELEASE_URL" "$appcast_path"; then
+  fail "$appcast_path does not link to the configured release URL"
 fi
 
 echo "Prepared signed Sparkle appcast: $appcast_path"
