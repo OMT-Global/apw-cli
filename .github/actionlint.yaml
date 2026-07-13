@@ -1,0 +1,7 @@
+self-hosted-runner:
+  labels:
+    - private
+    - public
+    - shell-only
+    - xcode
+    - sparkle-release

@@ -7,8 +7,9 @@ Usage: ./scripts/prepare-sparkle-appcast.sh --archive PATH --release-notes PATH 
 
 Prepare a Sparkle updates directory and run Sparkle's generate_appcast tool.
 The tool is expected to sign archives, release notes, and the appcast using
-Sparkle's configured EdDSA key material. Do not pass private keys on this
-script's command line.
+Sparkle's configured EdDSA key material. On ephemeral release runners, provide
+the private key through APW_SPARKLE_PRIVATE_ED_KEY; this helper forwards it over
+standard input. Do not pass private keys on this script's command line.
 
 Options:
   --archive PATH            Signed/notarized APW.app update archive.
@@ -34,6 +35,7 @@ DOWNLOAD_URL_PREFIX=""
 RELEASE_URL=""
 CRITICAL_UPDATE_VERSION=""
 CRITICAL_UPDATE_VERSION_SET=0
+SPARKLE_PRIVATE_ED_KEY="${APW_SPARKLE_PRIVATE_ED_KEY:-}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -114,6 +116,7 @@ fi
 [ -f "$ARCHIVE_PATH" ] || fail "archive not found: $ARCHIVE_PATH"
 [ -f "$RELEASE_NOTES_PATH" ] || fail "release notes not found: $RELEASE_NOTES_PATH"
 [ -x "$GENERATE_APPCAST" ] || fail "generate_appcast is not executable: $GENERATE_APPCAST"
+[ -n "$SPARKLE_PRIVATE_ED_KEY" ] || fail "APW_SPARKLE_PRIVATE_ED_KEY is required on ephemeral release runners"
 
 archive_name="$(basename "$ARCHIVE_PATH")"
 case "$archive_name" in
@@ -140,9 +143,14 @@ if [ "$CRITICAL_UPDATE_VERSION_SET" -eq 1 ]; then
 fi
 
 if [ "${#generate_args[@]}" -gt 0 ]; then
-  "$GENERATE_APPCAST" "${generate_args[@]}" "$UPDATES_DIR"
+  printf '%s' "$SPARKLE_PRIVATE_ED_KEY" | "$GENERATE_APPCAST" \
+    --ed-key-file - \
+    "${generate_args[@]}" \
+    "$UPDATES_DIR"
 else
-  "$GENERATE_APPCAST" "$UPDATES_DIR"
+  printf '%s' "$SPARKLE_PRIVATE_ED_KEY" | "$GENERATE_APPCAST" \
+    --ed-key-file - \
+    "$UPDATES_DIR"
 fi
 
 appcast_path="$UPDATES_DIR/$feed_file"
