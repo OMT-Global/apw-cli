@@ -30,7 +30,7 @@ jobs:
       native_app: ${{ steps.filter.outputs.native_app }}
       rust_native_e2e: ${{ steps.filter.outputs.rust_native_e2e }}
     steps:
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |

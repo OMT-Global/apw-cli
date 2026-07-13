@@ -44,7 +44,7 @@ jobs:
           echo "ci=true" >> "$GITHUB_OUTPUT"
           echo "extended=true" >> "$GITHUB_OUTPUT"
 
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         if: github.event_name == 'push'
         with:
