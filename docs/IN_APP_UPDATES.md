@@ -73,7 +73,10 @@ xcrun stapler validate APW.app
 
 The release archive, release notes, and appcast must be signed with Sparkle's
 EdDSA key. The private EdDSA key must stay in release automation secrets or a
-release keychain and must never be committed to this repository.
+release keychain and must never be committed to this repository. The Lume
+release pool is ephemeral, so APW uses the protected
+`APW_SPARKLE_PRIVATE_ED_KEY` release secret and passes it to Sparkle over
+standard input; it is never baked into the runner base VM.
 
 Sparkle appcast preparation should use the checked helper:
 
@@ -94,8 +97,10 @@ environment, such as Keychain-backed release automation.
 Tagged releases run this helper only when the release runner has both
 `SPARKLE_GENERATE_APPCAST` set to Sparkle's `generate_appcast` executable and
 `APW_SPARKLE_PUBLIC_ED_KEY` set to the public EdDSA key paired with the appcast
-signing key. Tagged release automation fails before publishing when either
-value is missing. With both values present, the release attaches `appcast.xml`
+signing key. Tagged release automation also requires
+`APW_SPARKLE_PRIVATE_ED_KEY` as a protected secret. Tagged release automation
+fails before publishing when any required value is missing. With all values
+present, the release attaches `appcast.xml`
 and the signed `APW.app` update archive to the GitHub release so the stable
 `/releases/latest/download/appcast.xml` feed URL resolves to a signed appcast.
 

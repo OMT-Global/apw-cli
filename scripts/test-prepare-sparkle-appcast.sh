@@ -57,7 +57,8 @@ XML
 FAKE
 chmod +x "$fake_generate"
 
-"$ROOT_DIR/scripts/prepare-sparkle-appcast.sh" \
+APW_SPARKLE_PRIVATE_ED_KEY="test-ed25519-private-key" \
+  "$ROOT_DIR/scripts/prepare-sparkle-appcast.sh" \
   --archive "$archive" \
   --release-notes "$notes" \
   --updates-dir "$updates" \
@@ -77,6 +78,19 @@ grep -Fx -- '--link' "$updates/generate_appcast.args" >/dev/null
 grep -Fx -- "$release_url" "$updates/generate_appcast.args" >/dev/null
 grep -Fx -- '--critical-update-version' "$updates/generate_appcast.args" >/dev/null
 grep -Fx -- '1.9.9' "$updates/generate_appcast.args" >/dev/null
+grep -Fx -- '--ed-key-file' "$updates/generate_appcast.args" >/dev/null
+grep -Fx -- '-' "$updates/generate_appcast.args" >/dev/null
+
+if "$ROOT_DIR/scripts/prepare-sparkle-appcast.sh" \
+  --archive "$archive" \
+  --release-notes "$notes" \
+  --updates-dir "$WORK_DIR/missing-private-key" \
+  --generate-appcast "$fake_generate" \
+  >"$WORK_DIR/missing-private-key.out" 2>"$WORK_DIR/missing-private-key.err"; then
+  echo "prepare-sparkle-appcast accepted a missing ephemeral private key." >&2
+  exit 1
+fi
+grep -q "APW_SPARKLE_PRIVATE_ED_KEY is required" "$WORK_DIR/missing-private-key.err"
 
 unsigned_notes_generate="$WORK_DIR/generate_unsigned_notes_appcast"
 cat >"$unsigned_notes_generate" <<'FAKE'
@@ -102,7 +116,8 @@ XML
 FAKE
 chmod +x "$unsigned_notes_generate"
 
-if "$ROOT_DIR/scripts/prepare-sparkle-appcast.sh" \
+if APW_SPARKLE_PRIVATE_ED_KEY="test-ed25519-private-key" \
+  "$ROOT_DIR/scripts/prepare-sparkle-appcast.sh" \
   --archive "$archive" \
   --release-notes "$notes" \
   --updates-dir "$WORK_DIR/unsigned-notes" \
@@ -125,7 +140,8 @@ cat >"$missing_security_notes" <<'NOTES'
 - Missing the security section required for critical updates.
 NOTES
 
-if "$ROOT_DIR/scripts/prepare-sparkle-appcast.sh" \
+if APW_SPARKLE_PRIVATE_ED_KEY="test-ed25519-private-key" \
+  "$ROOT_DIR/scripts/prepare-sparkle-appcast.sh" \
   --archive "$archive" \
   --release-notes "$missing_security_notes" \
   --updates-dir "$WORK_DIR/missing-security" \

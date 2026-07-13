@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: ['self-hosted', 'private', 'macOS', 'ARM64', 'xcode']
+    runs-on: ['self-hosted', 'private', 'macOS', 'ARM64', 'xcode', 'sparkle-release']
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -51,6 +51,7 @@ jobs:
         env:
           APW_SPARKLE_PUBLIC_ED_KEY: ${{ vars.APW_SPARKLE_PUBLIC_ED_KEY || '' }}
           SPARKLE_GENERATE_APPCAST: ${{ vars.SPARKLE_GENERATE_APPCAST || '' }}
+          APW_SPARKLE_PRIVATE_ED_KEY: ${{ secrets.APW_SPARKLE_PRIVATE_ED_KEY || '' }}
         run: |
           missing=()
           if [ -z "$APW_SPARKLE_PUBLIC_ED_KEY" ]; then
@@ -58,6 +59,9 @@ jobs:
           fi
           if [ -z "$SPARKLE_GENERATE_APPCAST" ]; then
             missing+=("SPARKLE_GENERATE_APPCAST")
+          fi
+          if [ -z "$APW_SPARKLE_PRIVATE_ED_KEY" ]; then
+            missing+=("APW_SPARKLE_PRIVATE_ED_KEY")
           fi
           if [ "${#missing[@]}" -gt 0 ]; then
             echo "Sparkle release configuration is incomplete; missing: ${missing[*]}" >&2
@@ -173,6 +177,7 @@ jobs:
         id: sparkle_appcast
         env:
           SPARKLE_GENERATE_APPCAST: ${{ vars.SPARKLE_GENERATE_APPCAST || '' }}
+          APW_SPARKLE_PRIVATE_ED_KEY: ${{ secrets.APW_SPARKLE_PRIVATE_ED_KEY || '' }}
         run: |
           if [ -z "$SPARKLE_GENERATE_APPCAST" ]; then
             echo "SPARKLE_GENERATE_APPCAST is required for tagged releases." >&2
