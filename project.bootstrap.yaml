@@ -15,15 +15,14 @@ repo:
     - SECURITY.md
     - .githooks/**
     - .devcontainer/**
-    - .github/workflows/pr-fast-ci.yml
-    - .github/workflows/extended-validation.yml
-    - .github/workflows/claude.yml
-    - scripts/check-detect-secrets.sh
-    - scripts/ci/**
     - scripts/codex-cloud/**
     - scripts/claude-cloud/**
     - scripts/claude/**
-    - docs/bootstrap/**
+    - docs/bootstrap/claude-environment.md
+    - docs/bootstrap/codex-cloud-environment.md
+    - docs/bootstrap/next-steps.md
+    - docs/bootstrap/onboarding.md
+    - docs/bootstrap/security.md
   docs:
     readme: true
     contributing: false
@@ -173,6 +172,10 @@ ci:
   extendedChecks:
     - template-review
   nightlyCron: 0 7 * * *
+  codeqlLanguages:
+    - javascript-typescript
+    - rust
+    - swift
   additionalWorkflows: []
   workflows:
     prFastCi: true
@@ -236,6 +239,7 @@ capabilities:
     enabled: false
   containers:
     enabled: false
+exceptions: []
 environments:
   dev:
     reviewers: []

@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "owner": "bootstrap",
+  "templateVersion": "2026.03.28.2",
+  "regenerationCommand": "bootstrap apply repo --manifest ./project.bootstrap.yaml",
+  "managedFiles": {
+    ".devcontainer/devcontainer.json": {
+      "sha256": "c8cd91bc1d2df220508bd84051723d480fe16d7bf8d93a8c3fa0beac403083ad",
+      "source": "bootstrap"
+    },
+    ".githooks/pre-commit": {
+      "sha256": "992bc9b04d62f84df70ba1e42d7159a1d976190eae41597810aaafaa30252a4d",
+      "source": "bootstrap"
+    },
+    ".github/PULL_REQUEST_TEMPLATE.md": {
+      "sha256": "b95b973bf0e6f5cdf77ad9d84e2f623525e493beed185d7d7b3093a4f50ec59d",
+      "source": "bootstrap"
+    },
+    "AGENTS.md": {
+      "sha256": "8acfcb8fe4d902e7892abdee9db7073c4f5fe33ac4733813c83a83434885a997",
+      "source": "bootstrap"
+    },
+    "CLAUDE.md": {
+      "sha256": "fa083f9f4b9b5a42c3179c0320070314ca7ae120dcf593b85677196e4914cdfe",
+      "source": "bootstrap"
+    },
+    "CODEOWNERS": {
+      "sha256": "d5b88668ece5258a10e66ab476d2135250623474ff24d14748d071c5076559b0",
+      "source": "bootstrap"
+    },
+    "docs/bootstrap/claude-environment.md": {
+      "sha256": "707dac647e02b7811f0ad99c367fbe9fc946aad3b0dd85366162eb10f39d2bb8",
+      "source": "bootstrap"
+    },
+    "docs/bootstrap/codex-cloud-environment.md": {
+      "sha256": "d523693384512cd1b07a2e3467afba4ad45c6a41bc00ae69c01601f6af85f10e",
+      "source": "bootstrap"
+    },
+    "docs/bootstrap/next-steps.md": {
+      "sha256": "4e471faef1858d9f2c36328f10621dccd6b01fdc2fd33bd6547d494518b469b9",
+      "source": "bootstrap"
+    },
+    "docs/bootstrap/onboarding.md": {
+      "sha256": "a223890f60a3d38cd68d320980f4e80c529a5c271053cb24639c68839d2dc92b",
+      "source": "bootstrap"
+    },
+    "docs/bootstrap/security.md": {
+      "sha256": "d8deb9aa1b5e91177145b3bdf8b7e329abe3da574c6bf7f92e535f6e28b331e8",
+      "source": "bootstrap"
+    },
+    "project.bootstrap.yaml": {
+      "sha256": "8ec24801eb0349dfd91efdef781300233e4a27646d7bf25e9f3b0f19bde0755c",
+      "source": "bootstrap"
+    },
+    "scripts/claude-cloud/setup.sh": {
+      "sha256": "77a9e57f3dde3cbdbaa2b7385667392463236d79a1cf84b355f1944e08a72eaf",
+      "source": "bootstrap"
+    },
+    "scripts/claude/setup-devcontainer.sh": {
+      "sha256": "4ad6cbff01875e6d1cb58e32460d10ca941defa0e02482dd20de65f15ba55211",
+      "source": "bootstrap"
+    },
+    "scripts/codex-cloud/maintenance.sh": {
+      "sha256": "8a4f5e11b133539c46dd9d45e74d49b19e0fb092e3620f2af8552e07cf94dabc",
+      "source": "bootstrap"
+    },
+    "scripts/codex-cloud/setup.sh": {
+      "sha256": "debc23607cccb92ed096941adc7da777ff794ec8c97d4efa842e592b33c29d10",
+      "source": "bootstrap"
+    },
+    "SECURITY.md": {
+      "sha256": "74daa1c5bb75938c109739135fa6c15d948928936b37830e378ad6fc92bc414e",
+      "source": "bootstrap"
+    }
+  }
+}
