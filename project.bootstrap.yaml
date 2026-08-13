@@ -163,6 +163,12 @@ github:
     dependabot: false
     secretScanningHints: true
 ci:
+  codeqlLanguages:
+    - javascript-typescript
+    - python
+    - ruby
+    - rust
+    - swift
   policy: standard-public
   runnerPolicy: hybrid-safe
   nodeVersion: "20"
