@@ -15,13 +15,16 @@ repo:
     - SECURITY.md
     - .githooks/**
     - .devcontainer/**
+    - .github/workflows/issue-hygiene.yml
     - scripts/codex-cloud/**
+    - scripts/ci/report-issue-hygiene.mjs
     - scripts/claude-cloud/**
     - scripts/claude/**
     - docs/bootstrap/claude-environment.md
     - docs/bootstrap/codex-cloud-environment.md
     - docs/bootstrap/next-steps.md
     - docs/bootstrap/onboarding.md
+    - docs/bootstrap/issue-hygiene.md
     - docs/bootstrap/security.md
   docs:
     readme: true
@@ -163,12 +166,6 @@ github:
     dependabot: false
     secretScanningHints: true
 ci:
-  codeqlLanguages:
-    - javascript-typescript
-    - python
-    - ruby
-    - rust
-    - swift
   policy: standard-public
   runnerPolicy: hybrid-safe
   nodeVersion: "20"
@@ -180,6 +177,8 @@ ci:
   nightlyCron: 0 7 * * *
   codeqlLanguages:
     - javascript-typescript
+    - python
+    - ruby
     - rust
     - swift
   additionalWorkflows: []

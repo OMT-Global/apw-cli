@@ -16,6 +16,10 @@
       "sha256": "b95b973bf0e6f5cdf77ad9d84e2f623525e493beed185d7d7b3093a4f50ec59d",
       "source": "bootstrap"
     },
+    ".github/workflows/issue-hygiene.yml": {
+      "sha256": "9708caebb5cae5ecb935c2350ddbf8105beaeb12ac6db31de609106ab8f3383b",
+      "source": "bootstrap"
+    },
     "AGENTS.md": {
       "sha256": "8acfcb8fe4d902e7892abdee9db7073c4f5fe33ac4733813c83a83434885a997",
       "source": "bootstrap"
@@ -36,6 +40,10 @@
       "sha256": "d523693384512cd1b07a2e3467afba4ad45c6a41bc00ae69c01601f6af85f10e",
       "source": "bootstrap"
     },
+    "docs/bootstrap/issue-hygiene.md": {
+      "sha256": "039344533cc90b966fd7ef6501bf6cfb956b5edc61126ad9c14aad545c315580",
+      "source": "bootstrap"
+    },
     "docs/bootstrap/next-steps.md": {
       "sha256": "4e471faef1858d9f2c36328f10621dccd6b01fdc2fd33bd6547d494518b469b9",
       "source": "bootstrap"
@@ -45,11 +53,15 @@
       "source": "bootstrap"
     },
     "docs/bootstrap/security.md": {
-      "sha256": "d8deb9aa1b5e91177145b3bdf8b7e329abe3da574c6bf7f92e535f6e28b331e8",
+      "sha256": "88cde376d14b2526b15f2f1fba874d1bdf3bb91a53e9736bce02020d44b5816a",
       "source": "bootstrap"
     },
     "project.bootstrap.yaml": {
-      "sha256": "8ec24801eb0349dfd91efdef781300233e4a27646d7bf25e9f3b0f19bde0755c",
+      "sha256": "6bf2342401b92c8e46a051d1e595ef4eb97f6a4febfe52559dbf8920fa588b9b",
+      "source": "bootstrap"
+    },
+    "scripts/ci/report-issue-hygiene.mjs": {
+      "sha256": "53bc2252f82e388ec4ba182cab500b78b3f429c304501a55c205ad3f0e534087",
       "source": "bootstrap"
     },
     "scripts/claude-cloud/setup.sh": {

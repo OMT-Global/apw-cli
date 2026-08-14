@@ -10,7 +10,7 @@
 
 - Dependency graph, Dependabot alerts and security updates, secret scanning, push protection, code scanning, and private vulnerability reporting are required capability observations for public repositories. The dependency-graph observation must also record `dependencyReviewEnabled: true` after provisioning verifies `DEPENDENCY_REVIEW_ENABLED=true`.
 - `.github/dependabot.yml` keeps both dependency and GitHub Actions pins updateable.
-- `.github/workflows/security.yml` performs dependency review, CodeQL analysis for `javascript-typescript,rust,swift`, and SPDX JSON SBOM generation using immutable action SHAs.
+- `.github/workflows/security.yml` performs dependency review, CodeQL analysis for `javascript-typescript,python,ruby,rust,swift`, and SPDX JSON SBOM generation using immutable action SHAs.
 - `SECURITY.md` directs reporters to a private advisory and defines acknowledgement, update, remediation, and coordinated-disclosure targets.
 
 ## Fork Safety
