@@ -53,6 +53,7 @@ done < <(find .github/scripts scripts -type f -name '*.sh' -print0)
 ./scripts/test-native-automation-config.sh
 ./scripts/test-native-app-preflight-config.sh
 bash ./scripts/test-pr-fast-ci-config.sh
+bash ./scripts/test-public-ci-runner-policy.sh
 ./scripts/test-bootstrap-sidecar.sh
 bash ./scripts/test-claude-workflow-config.sh
 
