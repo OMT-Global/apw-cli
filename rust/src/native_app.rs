@@ -468,7 +468,7 @@ fn ci_runner_environment_check() -> Value {
                 "WARN",
                 "runner_labels",
                 format!("CI runner reports os={runner_os}, arch={runner_arch}, but labels are not exposed"),
-                "Confirm the workflow runs on the documented self-hosted labels in docs/bootstrap/onboarding.md.",
+                "Confirm the workflow runs on the documented runner in docs/bootstrap/onboarding.md.",
             );
         }
         return diagnostic(
@@ -483,7 +483,7 @@ fn ci_runner_environment_check() -> Value {
         "WARN",
         "runner_labels",
         "Not running in GitHub Actions; runner labels cannot be verified locally",
-        "In CI, confirm shell-safe jobs use [self-hosted, linux, shell-only, public] and extended macOS validation uses [self-hosted, private, macOS, ARM64, xcode].",
+        "In CI, confirm ordinary Linux jobs use ubuntu-24.04 and extended macOS validation uses [self-hosted, private, macOS, ARM64, xcode].",
     )
 }
 
@@ -2070,8 +2070,8 @@ mod tests {
                     .expect("runner labels diagnostic");
                 let remediation = runner_labels["hint"].as_str().unwrap_or("");
                 assert!(
-                    remediation.contains("[self-hosted, linux, shell-only, public]"),
-                    "runner remediation should document the Linux shell-only pool: {remediation}"
+                    remediation.contains("ordinary Linux jobs use ubuntu-24.04"),
+                    "runner remediation should document the hosted Linux runner: {remediation}"
                 );
                 assert!(
                     !remediation.contains("synology"),

@@ -17,11 +17,11 @@
       "source": "bootstrap"
     },
     ".github/workflows/issue-hygiene.yml": {
-      "sha256": "9708caebb5cae5ecb935c2350ddbf8105beaeb12ac6db31de609106ab8f3383b",
+      "sha256": "e85e30bc363e6aec75bdae4c8fcb1bb78b35dcbc7df12468a626bcbb35856a2a",
       "source": "bootstrap"
     },
     "AGENTS.md": {
-      "sha256": "8acfcb8fe4d902e7892abdee9db7073c4f5fe33ac4733813c83a83434885a997",
+      "sha256": "653a7cb7f4e627d101d5caea4c95554442f8f2dc246675062fa03503f1dbd54e",
       "source": "bootstrap"
     },
     "CLAUDE.md": {
@@ -49,7 +49,7 @@
       "source": "bootstrap"
     },
     "docs/bootstrap/onboarding.md": {
-      "sha256": "a223890f60a3d38cd68d320980f4e80c529a5c271053cb24639c68839d2dc92b",
+      "sha256": "0c57d61bf687264576eedb2334e0f0863112b1a3626d5eda480adebd0fa932f2",
       "source": "bootstrap"
     },
     "docs/bootstrap/security.md": {
