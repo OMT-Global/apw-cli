@@ -34,22 +34,67 @@ require_literal() {
   grep -Fq -- "$literal" "$file" || fail "$message"
 }
 
+replace_first_literal() {
+  local source="$1"
+  local target="$2"
+  local replacement="$3"
+  local destination="$4"
+
+  awk -v target="$target" -v replacement="$replacement" '
+    !replaced {
+      offset = index($0, target)
+      if (offset) {
+        print substr($0, 1, offset - 1) replacement substr($0, offset + length(target))
+        replaced = 1
+        next
+      }
+    }
+    { print }
+  ' "$source" > "$destination"
+}
+
+active_runner_lines() {
+  awk '
+    {
+      trimmed = $0
+      sub(/^[[:space:]]+/, "", trimmed)
+      if (trimmed ~ /^#/) {
+        next
+      }
+      if ($0 ~ /^[[:space:]]*runs-on:[[:space:]]*/) {
+        print trimmed
+      }
+    }
+  ' "$@"
+}
+
+job_runner_lines() {
+  local workflow="$1"
+  local job_id="$2"
+  job_block "$workflow" "$job_id" | active_runner_lines /dev/stdin
+}
+
 require_job_runner() {
   local workflow="$1"
   local job_id="$2"
   local selector="$3"
-  local block
+  local block runner_lines
   block="$(job_block "$workflow" "$job_id")"
   [[ -n "$block" ]] || fail "Missing job ${job_id} in ${workflow}."
-  grep -Fq -- "$selector" <<<"$block" ||
+  runner_lines="$(job_runner_lines "$workflow" "$job_id")"
+  [[ "$runner_lines" == "$selector" ]] ||
     fail "Job ${job_id} in ${workflow} must retain ${selector}."
 }
 
 validate_policy() {
   local workflows="$1"
   local workflow job_id
+  local -a workflow_files
 
-  if grep -R -Fq --include='*.yml' --include='*.yaml' "$RETIRED_SELECTOR" "$workflows"; then
+  mapfile -t workflow_files < <(find "$workflows" -type f \( -name '*.yml' -o -name '*.yaml' \) -print)
+  ((${#workflow_files[@]} > 0)) || fail "No workflow files found in ${workflows}."
+
+  if active_runner_lines "${workflow_files[@]}" | grep -Fq -- "$RETIRED_SELECTOR"; then
     fail "Retired public self-hosted Linux selector is forbidden."
   fi
 
@@ -92,19 +137,22 @@ if [[ "$WORKFLOW_DIR" == "$ROOT_DIR/.github/workflows" ]]; then
   trap cleanup EXIT
 
   cp -R "$WORKFLOW_DIR" "$TMP_DIR/retired"
-  sed -i "0,/runs-on: ubuntu-24\\.04/s//$RETIRED_SELECTOR/" "$TMP_DIR/retired/extended-validation.yml"
+  replace_first_literal "$TMP_DIR/retired/extended-validation.yml" "$HOSTED_SELECTOR" "$RETIRED_SELECTOR" "$TMP_DIR/retired/extended-validation.yml.tmp"
+  mv "$TMP_DIR/retired/extended-validation.yml.tmp" "$TMP_DIR/retired/extended-validation.yml"
   if bash "$0" "$TMP_DIR/retired" >/dev/null 2>&1; then
     fail "Negative test accepted the retired public self-hosted selector."
   fi
 
   cp -R "$WORKFLOW_DIR" "$TMP_DIR/private"
-  sed -i "0,/runs-on: \['self-hosted', 'private', 'macOS', 'ARM64', 'xcode'\]/s//$HOSTED_SELECTOR/" "$TMP_DIR/private/extended-validation.yml"
+  replace_first_literal "$TMP_DIR/private/extended-validation.yml" "$PRIVATE_MAC_SELECTOR" "$HOSTED_SELECTOR" "$TMP_DIR/private/extended-validation.yml.tmp"
+  mv "$TMP_DIR/private/extended-validation.yml.tmp" "$TMP_DIR/private/extended-validation.yml"
   if bash "$0" "$TMP_DIR/private" >/dev/null 2>&1; then
     fail "Negative test accepted migration of the private macOS selector."
   fi
 
   cp -R "$WORKFLOW_DIR" "$TMP_DIR/pin"
-  sed -i 's/actions\/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020/actions\/setup-node@v4/' "$TMP_DIR/pin/issue-hygiene.yml"
+  sed 's/actions\/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020/actions\/setup-node@v4/' "$TMP_DIR/pin/issue-hygiene.yml" > "$TMP_DIR/pin/issue-hygiene.yml.tmp"
+  mv "$TMP_DIR/pin/issue-hygiene.yml.tmp" "$TMP_DIR/pin/issue-hygiene.yml"
   if bash "$0" "$TMP_DIR/pin" >/dev/null 2>&1; then
     fail "Negative test accepted an action pin change."
   fi
