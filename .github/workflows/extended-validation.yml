@@ -98,6 +98,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Verify vendored OpenSSL build inputs
         # Issue #40: Rust now builds OpenSSL through the openssl crate's
