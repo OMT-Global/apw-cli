@@ -6,7 +6,7 @@ WORKFLOW_DIR="${1:-$ROOT_DIR/.github/workflows}"
 RETIRED_SELECTOR="runs-on: ['self-hosted', 'linux', 'shell-only', 'public']"
 HOSTED_SELECTOR="runs-on: ubuntu-24.04"
 PRIVATE_MAC_SELECTOR="runs-on: ['self-hosted', 'private', 'macOS', 'ARM64', 'xcode']"
-HOSTED_MAC_SELECTOR="runs-on: macos-15-arm64"
+HOSTED_MAC_SELECTOR="runs-on: macos-15"
 SIGNING_SELECTOR="runs-on: ['self-hosted', 'private', 'macOS', 'ARM64', 'xcode', 'sparkle-release']"
 
 fail() {

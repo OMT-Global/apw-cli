@@ -89,7 +89,7 @@ jobs:
 
   extended-checks:
     name: Extended Checks
-    runs-on: macos-15-arm64
+    runs-on: macos-15
     timeout-minutes: 40
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
