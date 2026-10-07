@@ -6,6 +6,7 @@ WORKFLOW_DIR="${1:-$ROOT_DIR/.github/workflows}"
 RETIRED_SELECTOR="runs-on: ['self-hosted', 'linux', 'shell-only', 'public']"
 HOSTED_SELECTOR="runs-on: ubuntu-24.04"
 PRIVATE_MAC_SELECTOR="runs-on: ['self-hosted', 'private', 'macOS', 'ARM64', 'xcode']"
+HOSTED_MAC_SELECTOR="runs-on: macos-15"
 SIGNING_SELECTOR="runs-on: ['self-hosted', 'private', 'macOS', 'ARM64', 'xcode', 'sparkle-release']"
 
 fail() {
@@ -91,7 +92,10 @@ validate_policy() {
   local workflow job_id
   local -a workflow_files
 
-  mapfile -t workflow_files < <(find "$workflows" -type f \( -name '*.yml' -o -name '*.yaml' \) -print)
+  workflow_files=()
+  while IFS= read -r workflow; do
+    workflow_files+=("$workflow")
+  done < <(find "$workflows" -type f \( -name '*.yml' -o -name '*.yaml' \) -print)
   ((${#workflow_files[@]} > 0)) || fail "No workflow files found in ${workflows}."
 
   if active_runner_lines "${workflow_files[@]}" | grep -Fq -- "$RETIRED_SELECTOR"; then
@@ -113,14 +117,14 @@ pr-fast-ci.yml|ci-gate
 release.yml|publish-homebrew-tap
 EOF
 
-  require_job_runner "$workflows/extended-validation.yml" "extended-checks" "$PRIVATE_MAC_SELECTOR"
+  require_job_runner "$workflows/extended-validation.yml" "extended-checks" "$HOSTED_MAC_SELECTOR"
   require_job_runner "$workflows/release.yml" "release" "$SIGNING_SELECTOR"
 
   require_literal "$workflows/issue-hygiene.yml" "actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4" "Issue Hygiene checkout pin changed."
   require_literal "$workflows/issue-hygiene.yml" "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4" "Issue Hygiene setup-node pin changed."
   require_literal "$workflows/issue-hygiene.yml" "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4" "Issue Hygiene upload-artifact pin changed."
   require_literal "$workflows/extended-validation.yml" "name: Extended Validation Gate" "Extended Validation Gate name changed."
-  require_literal "$workflows/extended-validation.yml" "- extended-checks" "Extended Validation Gate must retain the private extended-checks dependency."
+  require_literal "$workflows/extended-validation.yml" "- extended-checks" "Extended Validation Gate must retain the extended-checks dependency."
   require_literal "$workflows/pr-fast-ci.yml" "name: CI Gate" "CI Gate name changed."
   require_literal "$workflows/pr-fast-ci.yml" "- native-app-swift-tests" "CI Gate must retain native-app-swift-tests."
   require_literal "$workflows/pr-fast-ci.yml" "- rust-native-e2e" "CI Gate must retain rust-native-e2e."
@@ -144,10 +148,17 @@ if [[ "$WORKFLOW_DIR" == "$ROOT_DIR/.github/workflows" ]]; then
   fi
 
   cp -R "$WORKFLOW_DIR" "$TMP_DIR/private"
-  replace_first_literal "$TMP_DIR/private/extended-validation.yml" "$PRIVATE_MAC_SELECTOR" "$HOSTED_SELECTOR" "$TMP_DIR/private/extended-validation.yml.tmp"
+  replace_first_literal "$TMP_DIR/private/extended-validation.yml" "$HOSTED_MAC_SELECTOR" "$PRIVATE_MAC_SELECTOR" "$TMP_DIR/private/extended-validation.yml.tmp"
   mv "$TMP_DIR/private/extended-validation.yml.tmp" "$TMP_DIR/private/extended-validation.yml"
   if bash "$0" "$TMP_DIR/private" >/dev/null 2>&1; then
-    fail "Negative test accepted migration of the private macOS selector."
+    fail "Negative test accepted a self-hosted extended test lane."
+  fi
+
+  cp -R "$WORKFLOW_DIR" "$TMP_DIR/signing"
+  replace_first_literal "$TMP_DIR/signing/release.yml" "$SIGNING_SELECTOR" "$HOSTED_MAC_SELECTOR" "$TMP_DIR/signing/release.yml.tmp"
+  mv "$TMP_DIR/signing/release.yml.tmp" "$TMP_DIR/signing/release.yml"
+  if bash "$0" "$TMP_DIR/signing" >/dev/null 2>&1; then
+    fail "Negative test accepted migration of the signed release selector."
   fi
 
   cp -R "$WORKFLOW_DIR" "$TMP_DIR/pin"
