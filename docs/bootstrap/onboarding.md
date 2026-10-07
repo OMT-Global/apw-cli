@@ -37,7 +37,7 @@ Use this checklist after the first bootstrap render or whenever `project.bootstr
 
 - Ordinary Linux jobs in this public repository use `ubuntu-24.04`.
 - Public repository security workflows use GitHub-hosted isolation. Fork pull-request jobs always remain read-only and GitHub-hosted.
-- Private specialized macOS, Xcode, and signing jobs retain their matching self-hosted capability pools. Docker, service-container, browser, and `container:` workloads require a compatible dedicated pool when standard hosted runners are unsuitable.
+- Extended tests use hosted `macos-15` with Xcode 16.4 and explicit Rust/clippy setup. Signed release jobs retain their matching self-hosted capability pools. Docker, service-container, browser, and `container:` workloads require a compatible dedicated pool when standard hosted runners are unsuitable.
 - Keep PR checks cheap. Add heavy validation to `scripts/ci/run-extended-validation.sh` instead of the PR lane.
 
 - Consume shared security, release, and AI attestation workflows from the control-plane repo once those contracts are pinned for production use.
