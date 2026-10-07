@@ -29,7 +29,7 @@
       "source": "bootstrap"
     },
     "CODEOWNERS": {
-      "sha256": "d5b88668ece5258a10e66ab476d2135250623474ff24d14748d071c5076559b0",
+      "sha256": "508f732ee4e0345ec6a24f01db55f79edf82222fdd12c6b90f3ffd322d3ddec3",
       "source": "bootstrap"
     },
     "docs/bootstrap/claude-environment.md": {
